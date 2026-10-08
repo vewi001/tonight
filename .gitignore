@@ -1,0 +1,46 @@
+# Secrets and local configuration. Keep only the safe example in Git.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python, test and operating-system caches.
+.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.log
+
+# Personal Tonight data. `data/art` contains original fallback art needed by
+# the application and is intentionally kept in source control.
+data/*
+!data/art/
+!data/art/**
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.backup
+*.bak
+data/backups/
+data/tonight-running.json
+
+# Generated builds, portable folders, release packages and local staging.
+outputs/
+work/
+build/
+dist/
+*.exe
+*.msi
+*.zip
+*.7z
+
