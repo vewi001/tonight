@@ -17,6 +17,7 @@ APP_VERSION = "1.6.4"
 PRESERVED_NAMES = {".env", ".venv", "data", "outputs", "work", "rollback", ".pytest_cache", "__pycache__"}
 MAX_RELEASE_FILES = 10_000
 MAX_RELEASE_BYTES = 500 * 1024 * 1024
+PORTABLE_PUBLIC_FILES = ("Tonight.exe", "Обновить Tonight.exe", ".env.example", "README.txt", "PRIVACY.txt")
 
 
 class ReleaseError(ValueError):
@@ -106,6 +107,30 @@ def create_release_archive(root: Path, archive: Path, *, version: str, files: li
     archive.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
         bundle.writestr(MANIFEST_NAME, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        for name in safe_files:
+            bundle.write(root / name, name)
+    return archive
+
+
+def create_portable_archive(root: Path, archive: Path) -> Path:
+    """Create a distributable portable ZIP without runtime data or secrets.
+
+    The archive deliberately uses a small allowlist instead of copying the
+    whole portable folder: ``data/`` and ``.env`` can contain personal data and
+    credentials, while ``catalog/`` is produced by ``stage_catalog_bundle``.
+    """
+    root = root.resolve()
+    files = list(PORTABLE_PUBLIC_FILES)
+    for name in PORTABLE_PUBLIC_FILES:
+        if not (root / name).is_file():
+            raise ReleaseError(f"Не найден файл для переносимого архива: {name}")
+    catalog = root / "catalog"
+    if not (catalog / "tonight.db").is_file():
+        raise ReleaseError("В переносимом архиве нет каталога фильмов")
+    files.extend(path.relative_to(root).as_posix() for path in catalog.rglob("*") if path.is_file())
+    safe_files = tuple(sorted(str(_safe_relative(name).as_posix()) for name in files))
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
         for name in safe_files:
             bundle.write(root / name, name)
     return archive

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from backend.catalog_bundle import stage_catalog_bundle
-from backend.release import APP_VERSION, create_release_archive
+from backend.release import APP_VERSION, create_portable_archive, create_release_archive
 
 
 def _build(script: str, name: str, stage: Path, work: Path, *, assets: bool = False) -> None:
@@ -54,6 +54,7 @@ def main() -> None:
         raise SystemExit("Для переносимой сборки нужен полный локальный каталог с постерами и фонами.")
     release_files = ["Tonight.exe", ".env.example", "README.txt", "PRIVACY.txt"] + [path.relative_to(output).as_posix() for path in (output / "catalog").rglob("*") if path.is_file()]
     create_release_archive(output, output.parent / f"Tonight-update-{APP_VERSION}.zip", version=APP_VERSION, files=release_files)
+    create_portable_archive(output, output.parent / f"Tonight-portable-{APP_VERSION}.zip")
     print(output)
 
 

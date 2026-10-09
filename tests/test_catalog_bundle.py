@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import shutil
 from pathlib import Path
 
 from backend.catalog_bundle import bootstrap_catalog, build_catalog_seed, stage_catalog_bundle
@@ -101,3 +102,11 @@ def test_stage_catalog_bundle_copies_only_catalog_and_media(tmp_path: Path):
     assert (tmp_path / "portable" / "catalog" / "posters" / "catalog-film.jpg").read_bytes() == b"poster"
     bundle = sqlite3.connect(tmp_path / "portable" / "catalog" / "tonight.db")
     assert bundle.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
+    bundle.close()
+
+    # A public portable ZIP transports only the .db file, never its SQLite WAL.
+    # The copied database must therefore contain the catalog by itself.
+    standalone = tmp_path / "standalone-catalog.db"
+    shutil.copy2(tmp_path / "portable" / "catalog" / "tonight.db", standalone)
+    with sqlite3.connect(standalone) as copied:
+        assert copied.execute("SELECT COUNT(*) FROM movies").fetchone()[0] == 1

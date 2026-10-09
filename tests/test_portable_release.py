@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.release import ReleaseError, apply_release, create_release_archive, read_release, rollback_previous
+from backend.release import ReleaseError, apply_release, create_portable_archive, create_release_archive, read_release, rollback_previous
 
 
 def _archive(path: Path, *, version: str = "1.5.0", files: dict[str, str] | None = None) -> Path:
@@ -94,3 +94,36 @@ def test_release_builder_writes_a_valid_manifested_archive(tmp_path: Path):
     archive = create_release_archive(portable, tmp_path / "Tonight-update-1.5.0.zip", version="1.5.0", files=["Tonight.exe"])
 
     assert read_release(archive).version == "1.5.0"
+
+
+def test_public_portable_archive_includes_only_program_and_catalog(tmp_path: Path):
+    portable = tmp_path / "portable"
+    portable.mkdir()
+    (portable / "Tonight.exe").write_bytes(b"binary")
+    (portable / "Обновить Tonight.exe").write_bytes(b"updater")
+    (portable / ".env.example").write_text("TMDB_READ_TOKEN=", encoding="utf-8")
+    (portable / "README.txt").write_text("readme", encoding="utf-8")
+    (portable / "PRIVACY.txt").write_text("privacy", encoding="utf-8")
+    (portable / ".env").write_text("TOKEN=private", encoding="utf-8")
+    (portable / "data").mkdir()
+    (portable / "data" / "tonight.db").write_bytes(b"personal history")
+    (portable / "catalog" / "posters").mkdir(parents=True)
+    (portable / "catalog" / "tonight.db").write_bytes(b"catalog only")
+    (portable / "catalog" / "posters" / "movie.jpg").write_bytes(b"poster")
+
+    archive = create_portable_archive(portable, tmp_path / "Tonight-portable.zip")
+
+    with zipfile.ZipFile(archive) as bundle:
+        names = sorted(entry.filename for entry in bundle.infolist() if not entry.is_dir())
+        template = bundle.read(".env.example").decode("utf-8")
+    assert names == [
+        ".env.example",
+        "PRIVACY.txt",
+        "README.txt",
+        "Tonight.exe",
+        "catalog/posters/movie.jpg",
+        "catalog/tonight.db",
+        "Обновить Tonight.exe",
+    ]
+    token_line = next(line for line in template.splitlines() if line.startswith("TMDB_READ_TOKEN="))
+    assert token_line == "TMDB_READ_TOKEN="

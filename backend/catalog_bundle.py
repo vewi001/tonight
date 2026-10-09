@@ -5,7 +5,7 @@ import shutil
 import sqlite3
 from pathlib import Path
 
-from backend.database.db import connect, initialize
+from backend.database.db import connect, db_session, initialize
 
 
 def _movie_columns(database: Path) -> list[str]:
@@ -31,7 +31,7 @@ def build_catalog_seed(source: Path, destination: Path) -> None:
         rows = source_db.execute(f"SELECT {','.join(columns)} FROM movies").fetchall()
     finally:
         source_db.close()
-    with connect(destination) as target:
+    with db_session(destination) as target:
         for row in rows:
             values = [None if column in {"poster_path", "backdrop_path"} else row[column] for column in columns]
             target.execute(
@@ -46,6 +46,15 @@ def build_catalog_seed(source: Path, destination: Path) -> None:
             "sessions", "users", "app_meta",
         ):
             target.execute(f"DELETE FROM {table}")
+    # The portable ZIP carries only tonight.db, not SQLite's sidecar WAL file.
+    # Merge pending writes and switch this immutable seed back to a single-file
+    # journal mode before it is copied into the archive.
+    checkpoint = sqlite3.connect(destination)
+    try:
+        checkpoint.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        checkpoint.execute("PRAGMA journal_mode=DELETE")
+    finally:
+        checkpoint.close()
 
 
 def _copy_missing_media(source: Path, destination: Path) -> int:
