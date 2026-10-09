@@ -617,6 +617,8 @@
   UI/API/backup/recovery/portable/public delivery доказаны. Production code не
   менялся после финального pytest 375 passed (45.87 с); node/diff PASS. Не
   утверждаем физическое отключение питания или доступность YouTube-видео.
-- Финальные документы синхронизировать с пользовательской копией и отправить
-  в main; assets и release tags не изменять. После проверки sync/servers можно
-  завершить цель. Обычный запуск — Portable Tonight/Tonight.exe версии 1.6.6.
+- Все 51 изменённые release paths синхронизированы с пользовательской копией
+  и сверены SHA-256; защищённые env/data DB hashes не изменились. Финальные
+  документы отправлены в main. Assets и release tags остались неизменными.
+  Требуемой незавершённой работы нет. Обычный запуск —
+  Portable Tonight/Tonight.exe версии 1.6.6.
