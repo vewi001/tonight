@@ -551,3 +551,39 @@
   с пользовательской копией; .env/data DB hashes и .venv сохранены. Пользовательские
   EXE не заменены до финального release workflow. Listeners на проверочных
   ports 8771/8784-8790 отсутствуют. Квота: 30% окна, 15% недели; reset не использован.
+
+## 10.10.2026 — публикация по отдельному подтверждению пользователя
+
+- Получено явное разрешение опубликовать код/1.6.6/catalog 1.0.0 с изображениями.
+  Git index audit: 51 source/test/doc files, локальных credentials нет; work/
+  outputs/.env/.venv/data не включены. Full pytest повторён: 375 passed (45.87 с),
+  node/diff PASS. Commit 4f85d46 отправлен в main; оба тега указывают на него.
+- Опубликованы https://github.com/vewi001/tonight/releases/tag/v1.6.6 и
+  https://github.com/vewi001/tonight/releases/tag/catalog-v1.0.0. Все три public
+  asset names/sizes/SHA-256 совпадают с локальными проверенными файлами;
+  draft/prerelease false. Latest API возвращает v1.6.6, каталог make_latest=false.
+- Первое выполнение локального publish helper неудачно импортировало старый
+  delivery script: его top-level --publish handler выполнил read-only audit/GET
+  старой 1.6.5 и остановился на проверке исходного тега, до PATCH. Старые assets,
+  release и tags не менялись. Новый helper автономен; успешная доставка exit 0.
+- Production Tonight.exe без mock transport и с пустым токеном запущен в
+  work/public-catalog-1.0.0-c75996oh, port 8791. Browser обнаружил публичный 1.0.0,
+  install начал настоящий GET. Первые 16056320 bytes получены; проверка намеренно
+  остановлена ДО установки. Полная онлайн-installation НЕ PASS. Отдельные
+  ограниченные read-only probes HTTP200/206 получили ~397/618 KB за 30 секунд;
+  начальная загрузка была медленной, позднее progress ускорился. Ни причины
+  сети, ни постоянная скорость для других пользователей не установлены.
+  Screenshot work/catalog-public-downloading.jpg. Session 45310 exit 1 ожидаемо
+  на assert done после намеренного прекращения, finally остановил собственный EXE.
+- Пользовательская Portable Tonight обновлена существующим helper до 1.6.6;
+  helper exit 0 и API version 1.6.6 подтверждены, затем сервер 8792 остановлен.
+  Первичный verification helper ошибочно сравнивал SELECT * старой/новой схемы
+  и завершился после обновления на assert. Read-only audit со страховочной
+  копией подтвердил: добавлены только sessions.selected_at/reconnect_count;
+  ВСЕ исходные personal columns/rows/settings/FK сохранены. Это ошибка тестового
+  сравнения схем, не потеря данных. Backup before-update-20261010-012926-462602.db
+  и rollback/previous сохранены. Пакет не заменяет env/venv/data.
+- Цель пока active: остаётся полная публичная загрузка/установка и подтверждение
+  done/preservation после неё. Не перепубликовывать assets, не двигать теги.
+  Для обычного запуска теперь пользовательская Portable Tonight/Tonight.exe 1.6.6.
+  Квота: 20% окна/13% недели; reset не использован.
