@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import socket
 import sys
@@ -15,10 +14,12 @@ import uvicorn
 from backend.config import ROOT, settings
 from backend.catalog_bundle import bootstrap_catalog
 from backend.database.db import initialize
-from backend.main import app
+from backend.main import app, set_update_shutdown, updates
 from backend.movies.seed import seed_movies
 from backend.network import lan_ip
 from backend.ollama.client import health
+from backend.update_install import process_exists
+from backend.process_state import running_marker, write_running_marker, is_running
 
 
 _server: uvicorn.Server | None = None
@@ -35,32 +36,8 @@ def local_url() -> str | None:
     return _local_url
 
 
-def running_marker(root: Path) -> Path:
-    return root / "data" / "tonight-running.json"
-
-
-def write_running_marker(marker: Path, *, pid: int | None = None) -> None:
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(json.dumps({"pid": pid or os.getpid()}), encoding="utf-8")
-
-
 def _process_exists(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
-
-
-def is_running(marker: Path, *, process_exists=_process_exists) -> bool:
-    try:
-        payload = json.loads(marker.read_text(encoding="utf-8"))
-        pid = payload.get("pid")
-    except (OSError, json.JSONDecodeError):
-        return False
-    return isinstance(pid, int) and process_exists(pid)
+    return process_exists(pid)
 
 
 def stop() -> None:
@@ -93,6 +70,7 @@ def available_port(preferred: int) -> int:
 def main() -> None:
     global _server, _local_url
     _stop_requested.clear()
+    set_update_shutdown(stop)
     initialize()
     bootstrap_catalog(ROOT)
     count = seed_movies()
@@ -132,7 +110,7 @@ def main() -> None:
     if _stop_requested.is_set():
         return
     marker = running_marker(ROOT)
-    write_running_marker(marker)
+    write_running_marker(marker, port=port)
     _server = uvicorn.Server(server_config(port))
     try:
         _server.run()
@@ -140,6 +118,7 @@ def main() -> None:
         _server = None
         _local_url = None
         marker.unlink(missing_ok=True)
+        set_update_shutdown(None)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ const state = {
   session: null,
   setup: null,
   invite: null,
+  update: null, updateTimer: null, updateDismissed: sessionStorage.getItem('tonight:update-dismissed') || '', updateInstallingFrom: null,
   view: 'loading',
   presence: { lera: false, nikita: false },
   connected: true,
@@ -113,7 +114,8 @@ function shell(content, { narrow = false, nav = true } = {}) {
       <button class="icon-button" data-view="watchlist">♡ <span class="nav-label">На потом</span></button>
       <button class="icon-button" data-view="taste">♡ <span class="nav-label">Наш вкус</span></button><button class="icon-button" data-view="search">⌕ <span class="nav-label">Найти</span></button>${identity}
     </nav></header>` : ''}
-    <main id="main" class="page ${narrow ? 'narrow' : ''}">${content}</main>
+    <div data-update-banner>${state.view === 'diagnostics' ? '' : updateControls()}</div>
+    <main id="main" class="page ${narrow ? 'narrow' : ''}">${content}${state.view === 'diagnostics' ? `<div data-update-panel>${updateControls(true)}</div>` : ''}</main>
     ${credits}
     ${!state.connected && state.user ? '<div class="reconnect">Связь пропала — восстанавливаем…</div>' : ''}
   </div>`;
@@ -373,6 +375,7 @@ function renderError() {
 }
 
 function bindCommon() {
+  bindUpdateButtons();
   root.querySelectorAll('[data-view]').forEach(el => el.addEventListener('click', () => go(el.dataset.view)));
   root.querySelectorAll('[data-user]').forEach(el => el.addEventListener('click', () => selectUser(el.dataset.user)));
   root.querySelector('[data-access-code]')?.addEventListener('input', event => { state.accessCode=event.target.value.replace(/\D/g, '').slice(0,6); event.target.value=state.accessCode; });
@@ -895,7 +898,75 @@ async function init() {
       connectWs();
     }
     render();
+    if (!isRemoteClient()) refreshUpdateStatus();
   } catch(e) { state.error=e.message; state.view='error'; render(); }
+}
+
+function updateControls(manual = false) {
+  if (isRemoteClient()) return '';
+  const update = state.update;
+  const busy = ['checking','downloading','ready','installing'].includes(update?.phase);
+  const offered = Boolean(update?.available_version);
+  if (!manual && (!offered || state.updateDismissed === update.available_version) && !['downloading','ready','installing'].includes(update?.phase)) return '';
+  const downloading = update?.phase === 'downloading';
+  const percent = downloading && update.total_bytes ? Math.min(100, Math.floor(update.download_bytes / update.total_bytes * 100)) : 0;
+  const title = offered ? `Доступно обновление ${esc(update.available_version)}` : 'Обновления Tonight';
+  return `<aside class="panel update-notice" aria-label="Обновление Tonight"><h3>${title}</h3>
+    <p role="status">${esc(update?.message || 'Проверьте, появилась ли новая версия')}${downloading ? ` · ${percent}%` : ''}</p>
+    ${downloading ? `<progress aria-label="Загрузка обновления" max="100" value="${percent}"></progress>` : ''}
+    ${offered ? `<p class="hint">${Math.ceil(update.total_bytes / 1024 / 1024)} МБ. После загрузки Tonight перезапустится. История и настройки сохранятся.</p>` : ''}
+    ${offered && !update.install_supported ? '<p class="hint">Обновление одной кнопкой доступно в переносимой версии для Windows.</p>' : ''}
+    <div class="footer-actions">${offered ? `<button class="button" data-update-action="install" ${busy || !update.install_supported ? 'disabled' : ''}>Скачать и обновить</button>${!busy ? '<button class="button ghost" data-update-action="dismiss">Не сейчас</button>' : ''}` : ''}
+    ${manual ? `<button class="button secondary" data-update-action="check" ${busy ? 'disabled' : ''}>${update?.phase === 'checking' ? 'Проверяем…' : 'Проверить обновления'}</button>` : ''}</div></aside>`;
+}
+
+function bindUpdateButtons() {
+  root.querySelectorAll('[data-update-action="check"]').forEach(button => button.addEventListener('click', checkUpdates));
+  root.querySelectorAll('[data-update-action="install"]').forEach(button => button.addEventListener('click', installUpdate));
+  root.querySelectorAll('[data-update-action="dismiss"]').forEach(button => button.addEventListener('click', () => {
+    state.updateDismissed = state.update?.available_version || '';
+    sessionStorage.setItem('tonight:update-dismissed', state.updateDismissed);
+    updateNotice();
+  }));
+}
+
+function updateNotice() {
+  const banner = root.querySelector('[data-update-banner]');
+  if (banner) banner.innerHTML = state.view === 'diagnostics' ? '' : updateControls();
+  const panel = root.querySelector('[data-update-panel]');
+  if (panel) panel.innerHTML = updateControls(true);
+  bindUpdateButtons();
+}
+
+async function refreshUpdateStatus() {
+  clearTimeout(state.updateTimer);
+  try {
+    const update = await api('/api/updates');
+    if (state.updateInstallingFrom && update.current_version !== state.updateInstallingFrom) { location.reload(); return; }
+    state.update = update;
+    if (update.phase === 'installing') state.updateInstallingFrom = update.current_version;
+    updateNotice();
+  } catch (_) { /* The server briefly closes while the updater restarts Tonight. */ }
+  const busy = ['idle','checking','downloading','ready','installing'].includes(state.update?.phase) || state.updateInstallingFrom;
+  state.updateTimer = setTimeout(refreshUpdateStatus, busy ? 1500 : 30000);
+}
+
+async function checkUpdates() {
+  state.update = {...state.update, phase:'checking', message:'Проверяем обновления…'};
+  updateNotice();
+  try {
+    state.update = await api('/api/updates/check', {method:'POST', headers:{'X-Tonight-Update':'1'}});
+    state.updateDismissed = ''; sessionStorage.removeItem('tonight:update-dismissed');
+  } catch (error) { state.update = {...state.update, phase:'error', message:error.message}; }
+  updateNotice();
+}
+
+async function installUpdate() {
+  try {
+    state.update = await api('/api/updates/install', {method:'POST', headers:{'X-Tonight-Update':'1'}});
+    state.updateInstallingFrom = state.update.current_version;
+    updateNotice(); refreshUpdateStatus();
+  } catch (error) { toast(error.message); }
 }
 
 init();

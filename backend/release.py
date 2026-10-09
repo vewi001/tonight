@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -13,8 +15,8 @@ from backend.backups import create_backup
 
 MANIFEST_NAME = "tonight-release.json"
 RELEASE_FORMAT = 1
-APP_VERSION = "1.6.4"
-PRESERVED_NAMES = {".env", ".venv", "data", "outputs", "work", "rollback", ".pytest_cache", "__pycache__"}
+APP_VERSION = "1.6.5"
+PRESERVED_NAMES = {".env", ".venv", "data", "outputs", "work", "rollback", "updates", ".pytest_cache", "__pycache__"}
 MAX_RELEASE_FILES = 10_000
 MAX_RELEASE_BYTES = 500 * 1024 * 1024
 PORTABLE_PUBLIC_FILES = ("Tonight.exe", "Обновить Tonight.exe", ".env.example", "README.txt", "PRIVACY.txt")
@@ -24,6 +26,61 @@ class ReleaseError(ValueError):
     """A local file is not a safe Tonight update package."""
 
 
+class RecoveryError(ReleaseError):
+    """Program restoration failed; never restart the possibly partial application."""
+
+
+def _is_link(path: Path) -> bool:
+    try:
+        return path.is_symlink() or bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400)
+    except FileNotFoundError:
+        return False
+
+
+def _checked_target(root: Path, name: str) -> Path:
+    return _checked_path(root, _safe_relative(name))
+
+
+def _checked_path(root: Path, relative: Path) -> Path:
+    target = root / relative
+    candidate = root
+    for part in relative.parts:
+        candidate = candidate / part
+        if _is_link(candidate):
+            raise ReleaseError("Обновление не может изменять файлы через ссылки-папки")
+    if not target.resolve().is_relative_to(root):
+        raise ReleaseError("Путь обновления выходит за папку Tonight")
+    return target
+
+
+def _atomic_copy(source: Path, target: Path, *, restoring: bool = False) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    prefix = ".tonight-restore-" if restoring else ".tonight-new-"
+    handle, name = tempfile.mkstemp(prefix=prefix, dir=target.parent)
+    os.close(handle)
+    sibling = Path(name)
+    try:
+        shutil.copy2(source, sibling)
+        os.replace(sibling, target)
+    finally:
+        sibling.unlink(missing_ok=True)
+
+
+def _restore_changed(root: Path, snapshot: Path, changed: list[str]) -> None:
+    failed = False
+    for name in reversed(changed):
+        try:
+            previous, target = snapshot / name, root / name
+            if previous.is_file():
+                _atomic_copy(previous, target, restoring=True)
+            else:
+                target.unlink(missing_ok=True)
+        except OSError:
+            failed = True
+    if failed:
+        raise RecoveryError("Не удалось восстановить все файлы Tonight. Не запускайте программу; сохранённая версия находится в rollback. Личные данные не изменены.")
+
+
 @dataclass(frozen=True)
 class Release:
     version: str
@@ -31,13 +88,18 @@ class Release:
 
 
 def _safe_relative(name: str) -> Path:
-    if "\\" in name or ":" in name:
+    if any(character in name for character in '\\:*?"<>|') or any(ord(character) < 32 for character in name):
         raise ReleaseError("Пакет содержит небезопасный путь")
     posix = PurePosixPath(name)
     if not name or posix.is_absolute() or ".." in posix.parts or len(posix.parts) == 0:
         raise ReleaseError("Пакет содержит небезопасный путь")
-    if posix.parts[0] in PRESERVED_NAMES:
+    if any(part.casefold() in PRESERVED_NAMES for part in posix.parts):
         raise ReleaseError("Пакет пытается заменить личные данные")
+    devices = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+    if any(part.endswith((".", " ")) or part.split(".")[0].casefold() in devices for part in posix.parts):
+        raise ReleaseError("Пакет содержит небезопасный путь Windows")
+    if name != posix.as_posix():
+        raise ReleaseError("Пакет содержит неоднозначный путь")
     return Path(*posix.parts)
 
 
@@ -62,7 +124,7 @@ def read_release(archive: Path) -> Release:
     files = manifest.get("files")
     if not isinstance(version, str) or not version.strip() or not isinstance(files, list) or not files:
         raise ReleaseError("В манифесте Tonight не хватает версии или файлов")
-    if any(not isinstance(item, str) for item in files) or len(files) != len(set(files)):
+    if any(not isinstance(item, str) for item in files) or len(files) != len({item.casefold() for item in files}):
         raise ReleaseError("Манифест Tonight содержит повторяющиеся файлы")
     safe_files = tuple(sorted(str(_safe_relative(item).as_posix()) for item in files))
     archived_files = sorted(name for name in names if name != MANIFEST_NAME)
@@ -76,8 +138,10 @@ def _copy_application(source: Path, destination: Path) -> None:
         shutil.rmtree(destination)
     destination.mkdir(parents=True, exist_ok=True)
     for item in source.iterdir():
-        if item.name in PRESERVED_NAMES:
+        if item.name.casefold() in PRESERVED_NAMES:
             continue
+        if _is_link(item) or (item.is_dir() and any(_is_link(path) for path in item.rglob("*"))):
+            raise ReleaseError("Сначала перенесите Tonight в обычную папку без ссылок-папок")
         target = destination / item.name
         if item.is_dir():
             shutil.copytree(item, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -141,57 +205,98 @@ def apply_release(root: Path, archive: Path, *, backup: Callable[[Path], object]
     root = root.resolve()
     release = read_release(archive)
     root.mkdir(parents=True, exist_ok=True)
-    (backup or _default_backup)(root)
-
-    rollback = root / "rollback" / "previous"
-    _copy_application(root, rollback)
-    with zipfile.ZipFile(archive) as bundle:
-        for name in release.files:
-            target = root / _safe_relative(name)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with bundle.open(name) as source, target.open("wb") as destination:
-                shutil.copyfileobj(source, destination)
-    manifest = {"product": "Tonight", "format": RELEASE_FORMAT, "version": release.version, "files": list(release.files)}
-    (root / MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    for name in release.files:
+        _checked_target(root, name)
+    _checked_path(root, Path("rollback/previous"))
+    with tempfile.TemporaryDirectory(prefix="tonight-install-stage-") as temporary:
+        stage = Path(temporary)
+        try:
+            with zipfile.ZipFile(archive) as bundle:
+                for name in release.files:
+                    staged = stage / name
+                    staged.parent.mkdir(parents=True, exist_ok=True)
+                    with bundle.open(name) as source, staged.open("wb") as destination:
+                        shutil.copyfileobj(source, destination)
+        except (zipfile.BadZipFile, RuntimeError) as exc:
+            raise ReleaseError("Архив обновления повреждён") from exc
+        (backup or _default_backup)(root)
+        rollback = root / "rollback" / "previous"
+        _copy_application(root, rollback)
+        changed: list[str] = []
+        try:
+            for name in release.files:
+                target = root / name
+                _atomic_copy(stage / name, target)
+                changed.append(name)
+            manifest = {"product": "Tonight", "format": RELEASE_FORMAT, "version": release.version, "files": list(release.files)}
+            (stage / MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            _atomic_copy(stage / MANIFEST_NAME, root / MANIFEST_NAME)
+            changed.append(MANIFEST_NAME)
+        except OSError:
+            _restore_changed(root, rollback, changed)
+            raise
     return release
 
 
-def _remove_current_managed_files(root: Path) -> None:
+def _current_managed_files(root: Path) -> list[str]:
     manifest_path = root / MANIFEST_NAME
     if not manifest_path.exists():
-        return
+        return []
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         files = manifest.get("files", []) if isinstance(manifest, dict) else []
     except json.JSONDecodeError:
         files = []
+    names = []
     for item in files:
         if not isinstance(item, str):
             continue
         try:
-            target = root / _safe_relative(item)
+            relative = _safe_relative(item)
         except ReleaseError:
             continue
-        if target.is_file():
-            target.unlink()
-    manifest_path.unlink(missing_ok=True)
+        names.append(relative.as_posix())
+    return names
 
 
 def rollback_previous(root: Path) -> None:
     """Restore the last program-file snapshot without replacing data or .env."""
     root = root.resolve()
     previous = root / "rollback" / "previous"
+    _checked_path(root, Path("rollback/previous"))
     if not previous.is_dir():
         raise ReleaseError("Предыдущая версия Tonight не найдена")
-    _remove_current_managed_files(root)
-    for item in previous.iterdir():
-        if item.name in PRESERVED_NAMES:
-            continue
-        target = root / item.name
-        if item.is_dir():
-            if target.exists():
-                shutil.copytree(item, target, dirs_exist_ok=True)
-            else:
-                shutil.copytree(item, target)
-        else:
-            shutil.copy2(item, target)
+    old_files = sorted(path.relative_to(previous).as_posix() for path in previous.rglob("*")
+                       if path.is_file() and path.relative_to(previous).parts[0].casefold() not in PRESERVED_NAMES)
+    names = set(old_files) | set(_current_managed_files(root)) | {MANIFEST_NAME}
+    for name in names:
+        _checked_target(root, name)
+        _checked_target(previous, name)
+    # Preserve the current version until the entire rollback succeeds. Keep this
+    # recovery directory if restoring it fails too, rather than deleting evidence.
+    snapshot = Path(tempfile.mkdtemp(prefix="restore-current-", dir=root / "rollback"))
+    changed: list[str] = []
+    recovery_failed = False
+    try:
+        for name in names:
+            if (root / name).is_file():
+                destination = snapshot / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(root / name, destination)
+        try:
+            for name in old_files:
+                _atomic_copy(previous / name, root / name)
+                changed.append(name)
+            for name in sorted(names - set(old_files)):
+                (root / name).unlink(missing_ok=True)
+                changed.append(name)
+        except OSError:
+            try:
+                _restore_changed(root, snapshot, changed)
+            except RecoveryError:
+                recovery_failed = True
+                raise
+            raise
+    finally:
+        if not recovery_failed:
+            shutil.rmtree(snapshot)

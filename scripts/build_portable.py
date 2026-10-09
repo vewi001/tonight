@@ -13,6 +13,12 @@ from backend.catalog_bundle import stage_catalog_bundle
 from backend.release import APP_VERSION, create_portable_archive, create_release_archive
 
 
+def update_payload_files(output: Path) -> list[str]:
+    return ["Tonight.exe", "Обновить Tonight.exe", ".env.example", "README.txt", "PRIVACY.txt"] + sorted(
+        path.relative_to(output).as_posix() for path in (output / "catalog").rglob("*") if path.is_file()
+    )
+
+
 def _build(script: str, name: str, stage: Path, work: Path, *, assets: bool = False) -> None:
     try:
         import PyInstaller.__main__
@@ -52,7 +58,7 @@ def main() -> None:
     staged = stage_catalog_bundle(catalog_source, output / "catalog")
     if staged["movies"] < 100 or staged["media"] < 100:
         raise SystemExit("Для переносимой сборки нужен полный локальный каталог с постерами и фонами.")
-    release_files = ["Tonight.exe", ".env.example", "README.txt", "PRIVACY.txt"] + [path.relative_to(output).as_posix() for path in (output / "catalog").rglob("*") if path.is_file()]
+    release_files = update_payload_files(output)
     create_release_archive(output, output.parent / f"Tonight-update-{APP_VERSION}.zip", version=APP_VERSION, files=release_files)
     create_portable_archive(output, output.parent / f"Tonight-portable-{APP_VERSION}.zip")
     print(output)

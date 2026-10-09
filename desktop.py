@@ -14,6 +14,8 @@ from backend.config import ROOT
 
 def main() -> None:
     window = Tk()
+    # Publish the child PID even if startup hangs before the server is ready.
+    launcher.write_running_marker(launcher.running_marker(ROOT))
     window.title("Tonight")
     window.resizable(False, False)
     window.configure(padx=28, pady=24)
@@ -42,7 +44,13 @@ def main() -> None:
 
     def close() -> None:
         launcher.stop()
-        window.after(150, window.destroy)
+        status.configure(text="Останавливаем Tonight…")
+        def wait_stopped() -> None:
+            if worker.is_alive():
+                window.after(100, wait_stopped)
+            else:
+                window.destroy()
+        wait_stopped()
 
     Button(window, text="Открыть Tonight", command=open_tonight, width=22).pack(pady=3)
     Button(window, text="Остановить Tonight", command=close, width=22).pack(pady=3)
@@ -57,6 +65,9 @@ def main() -> None:
             window.after(300, refresh)
             return
         if event is None:
+            if launcher.updates.status()["phase"] == "installing":
+                window.destroy()
+                return
             status.configure(text="Tonight остановлен")
         else:
             status.configure(text="Не удалось запустить Tonight")

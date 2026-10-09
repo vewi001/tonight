@@ -5,6 +5,8 @@ import io
 import json
 import secrets
 import sqlite3
+import sys
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -35,7 +37,9 @@ from backend.recommendation.engine import recommend
 from backend.recommendation.avoidance import add_avoidance, list_avoidances, remove_avoidance
 from backend.recommendation.taste_profile import exclude_genre, profile_filters, reset_profile
 from backend.recommendation.weekly import weekly_picks
-from backend.release import APP_VERSION
+from backend.release import APP_VERSION, ReleaseError
+from backend.auto_update import UpdateManager, UpdateError
+from backend.update_install import prepare_handoff
 from backend.sessions.service import (
     active_session, both_ready, choose_catalog_movie, choose_movie, choose_saved_movie, choose_specific_recommendation, confirm_watched, decline_selected_movie, ensure_participant,
     WATCHLIST_REASONS, get_deck, record_connection_restored, remove_saved_movie, save_movie_for_later, save_preferences, save_swipe, saved_movies, session_access_code, session_state, store_recommendations,
@@ -44,6 +48,37 @@ from backend.usage_metrics import usage_summary
 
 STATIC = ASSET_ROOT / "frontend"
 install_expected_disconnect_filter()
+updates = UpdateManager(ROOT, APP_VERSION, install_supported=bool(getattr(sys, "frozen", False)))
+_update_shutdown = None
+_update_jobs: set[asyncio.Task] = set()
+
+
+def set_update_shutdown(callback) -> None:
+    global _update_shutdown
+    _update_shutdown = callback
+
+
+async def _update_check_loop() -> None:
+    while True:
+        await asyncio.to_thread(updates.check)
+        await asyncio.sleep(6 * 3600)
+
+
+async def _download_and_install(update) -> None:
+    try:
+        path = await asyncio.to_thread(updates.download_reserved, update)
+        if path is None:
+            return
+        if _update_shutdown is None:
+            raise UpdateError("Откройте Tonight через переносимую программу, чтобы установить обновление.")
+        pids = [os.getpid()]
+        if getattr(sys, "frozen", False):
+            pids.append(os.getppid())  # onefile bootloader also holds the executable
+        await asyncio.to_thread(prepare_handoff, ROOT, path, update, pids=pids)
+        updates.mark_installing()
+        _update_shutdown()
+    except (OSError, UpdateError, ReleaseError):
+        updates.fail("Не удалось начать установку. Можно продолжать вечер и повторить обновление позже.")
 
 
 @asynccontextmanager
@@ -54,12 +89,18 @@ async def lifespan(_: FastAPI):
     # Catalog metadata is refreshed separately from recommendations, so a slow
     # network can never block the evening flow.
     refresh_task = asyncio.create_task(_catalog_refresh_loop())
+    update_task = asyncio.create_task(_update_check_loop())
     try:
         yield
     finally:
         refresh_task.cancel()
+        update_task.cancel()
         try:
             await refresh_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await update_task
         except asyncio.CancelledError:
             pass
 
@@ -115,7 +156,7 @@ async def finalize_recommendations(session_id: int) -> dict:
 async def health() -> dict:
     with db_session() as db:
         count = db.execute("SELECT COUNT(*) FROM movies").fetchone()[0]
-    return {"ok": True, "database": True, "movies": count}
+    return {"ok": True, "database": True, "movies": count, "version": APP_VERSION}
 
 
 @app.get("/api/diagnostics")
@@ -187,6 +228,44 @@ def _is_loopback(host: str | None) -> bool:
 def _require_main_computer(request: Request) -> None:
     if not _is_loopback(request.client.host if request.client else None):
         raise HTTPException(403, "Это действие доступно только на основном компьютере")
+
+
+def _require_update_action(request: Request) -> None:
+    _require_main_computer(request)
+    host = request.url.hostname
+    test_client = request.client is not None and request.client.host == "testclient"
+    if host not in {"127.0.0.1", "localhost", "::1"} and not (test_client and host == "testserver"):
+        raise HTTPException(403, "Обновляйте Tonight на основном компьютере через localhost")
+    if request.headers.get("X-Tonight-Update") != "1":
+        raise HTTPException(403, "Обновляйте Tonight кнопкой внутри приложения")
+    origin = request.headers.get("Origin")
+    if origin is not None and origin != str(request.base_url).rstrip("/"):
+        raise HTTPException(403, "Обновляйте Tonight кнопкой внутри приложения")
+
+
+@app.get("/api/updates")
+async def update_status(request: Request) -> dict:
+    _require_main_computer(request)
+    return updates.status()
+
+
+@app.post("/api/updates/check")
+async def check_app_updates(request: Request) -> dict:
+    _require_update_action(request)
+    return await asyncio.to_thread(updates.check, force=True)
+
+
+@app.post("/api/updates/install", status_code=202)
+async def install_app_update(request: Request) -> dict:
+    _require_update_action(request)
+    try:
+        update = updates.reserve_download()
+    except UpdateError as error:
+        raise HTTPException(409, str(error)) from None
+    task = asyncio.create_task(_download_and_install(update))
+    _update_jobs.add(task)
+    task.add_done_callback(_update_jobs.discard)
+    return updates.status()
 
 
 def _public_session_state(session: dict) -> dict:

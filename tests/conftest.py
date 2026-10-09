@@ -26,3 +26,10 @@ def clean_database():
         target = Path(str(path) + suffix)
         if target.exists(): target.unlink()
 
+
+@pytest.fixture(autouse=True)
+def no_live_update_requests(monkeypatch):
+    # Tests never query a live GitHub release or start a real update job.
+    import backend.auto_update as auto
+    monkeypatch.setattr(auto, "fetch_latest_update", lambda version: None)
+
