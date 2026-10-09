@@ -26,10 +26,10 @@ button:focus-visible, [tabindex]:focus-visible, a:focus-visible { outline: 3px s
 .skip-link { position:fixed; left:1rem; top:-4rem; z-index:100; padding:.8rem 1rem; background:white; color:black; border-radius:.7rem; }
 .skip-link:focus { top:1rem; }
 .shell { min-height:100vh; padding: 1.2rem clamp(1rem, 3vw, 3rem) 6rem; animation:fade-in .35s ease both; }
-.topbar { max-width:1240px; margin:0 auto 2rem; display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+.topbar { max-width:1240px; margin:0 auto 2rem; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:1rem; }
 .brand { border:0; background:none; padding:.4rem 0; font-weight:850; font-size:1.45rem; letter-spacing:-.04em; cursor:pointer; }
 .brand span { color:var(--accent); }
-.top-actions { display:flex; align-items:center; gap:.5rem; }
+.top-actions { display:flex; flex-wrap:wrap; max-width:100%; align-items:center; gap:.5rem; }
 .icon-button { border:1px solid var(--line); background:rgba(18,16,23,.76); padding:.68rem .9rem; border-radius:999px; cursor:pointer; backdrop-filter:blur(16px); }
 .identity-pill { display:flex; align-items:center; gap:.45rem; }
 .page { max-width:1160px; margin:0 auto; }

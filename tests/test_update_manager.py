@@ -51,3 +51,20 @@ def test_download_failure_can_be_retried_without_losing_offer(tmp_path, monkeypa
     assert manager.download_reserved(update) is None
     assert manager.status()["phase"] == "error"
     assert manager.reserve_download() == update
+
+
+def test_app_job_blocks_other_manager_until_failure(tmp_path,monkeypatch):
+    from backend.update_guard import acquire_update_lease, UpdateBusyError
+    monkeypatch.setattr(module,'fetch_latest_update',lambda version:available())
+    first = UpdateManager(tmp_path,'1.6.4',install_supported=True)
+    second = UpdateManager(tmp_path,'1.6.4',install_supported=True)
+    first.check(); second.check()
+    first.reserve_download()
+    with pytest.raises(UpdateBusyError):
+        acquire_update_lease(tmp_path)
+    with pytest.raises(UpdateError):
+        second.reserve_download()
+    assert second.status()['phase']=='available'
+    first.fail('Failure')
+    second.reserve_download()
+    second.fail('Cleanup')

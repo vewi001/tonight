@@ -8,10 +8,10 @@ import sys
 from tkinter import Button, Label, Tk, filedialog, messagebox
 
 from backend.config import ROOT
-from backend.release import RecoveryError, ReleaseError, apply_release, rollback_previous
+from backend.release import RecoveryError, ReleaseError
 from backend.process_state import is_running, running_marker
 from backend.auto_update import AvailableUpdate, UpdateError
-from backend.update_install import accept_handoff, install_downloaded, start_manual_runner, wait_for_processes
+from backend.update_install import accept_handoff, install_downloaded, start_manual_runner, wait_for_processes, apply_manual_release, restore_manual_release
 
 
 def automatic_main(argv: list[str]) -> None:
@@ -63,8 +63,8 @@ def main(root: Path = ROOT) -> None:
         if not path:
             return
         try:
-            release = apply_release(root, Path(path))
-        except (OSError, ReleaseError) as exc:
+            release = apply_manual_release(root, Path(path))
+        except (OSError, ReleaseError, UpdateError) as exc:
             messagebox.showerror("Не удалось обновить", str(exc))
             return
         messagebox.showinfo("Tonight обновлён", f"Готово: версия {release.version}. Ваши данные и настройки сохранены.")
@@ -75,8 +75,8 @@ def main(root: Path = ROOT) -> None:
         if not messagebox.askyesno("Вернуть прошлую версию", "Вернуть прежние файлы Tonight? Ваши данные и настройки останутся на месте."):
             return
         try:
-            rollback_previous(root)
-        except (OSError, ReleaseError) as exc:
+            restore_manual_release(root)
+        except (OSError, ReleaseError, UpdateError) as exc:
             messagebox.showerror("Не удалось вернуть версию", str(exc))
             return
         messagebox.showinfo("Готово", "Прежняя версия Tonight возвращена. Данные сохранены.")

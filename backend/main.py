@@ -7,7 +7,7 @@ import secrets
 import sqlite3
 import sys
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +20,10 @@ import qrcode.image.svg
 from backend.api.realtime import manager
 from backend.backups import MAX_IMPORTED_BACKUP_BYTES, create_backup, import_backup, list_backups, restore_backup
 from backend.catalog_bundle import bootstrap_catalog
+from backend.catalog_manager import CatalogUpdateManager
+from backend.catalog_status import get_catalog_summary
+from backend.catalog_recovery import CatalogInstallError, checked as checked_catalog_path, recover_catalog_install
+from backend.update_guard import acquire_update_lease, UpdateGuardError
 from backend.config import ASSET_ROOT, ROOT, settings
 from backend.database.db import db_session, generate_access_code, initialize, loads
 from backend.logging_filters import install_expected_disconnect_filter
@@ -49,8 +53,10 @@ from backend.usage_metrics import usage_summary
 STATIC = ASSET_ROOT / "frontend"
 install_expected_disconnect_filter()
 updates = UpdateManager(ROOT, APP_VERSION, install_supported=bool(getattr(sys, "frozen", False)))
+catalog_updates = CatalogUpdateManager(ROOT, APP_VERSION, database=settings.db_path)
 _update_shutdown = None
 _update_jobs: set[asyncio.Task] = set()
+_catalog_jobs: set[asyncio.Task] = set()
 
 
 def set_update_shutdown(callback) -> None:
@@ -83,6 +89,7 @@ async def _download_and_install(update) -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    await asyncio.to_thread(catalog_updates.recover)
     initialize()
     bootstrap_catalog(ROOT)
     seed_movies()
@@ -99,6 +106,10 @@ async def lifespan(_: FastAPI):
             await refresh_task
         except asyncio.CancelledError:
             pass
+        # to_thread cannot be stopped by cancelling its asyncio wrapper. Keep
+        # its lease and DB connection alive until the real catalog worker ends.
+        if _catalog_jobs:
+            await asyncio.gather(*list(_catalog_jobs),return_exceptions=True)
         try:
             await update_task
         except asyncio.CancelledError:
@@ -266,6 +277,61 @@ async def install_app_update(request: Request) -> dict:
     _update_jobs.add(task)
     task.add_done_callback(_update_jobs.discard)
     return updates.status()
+
+
+@app.get('/api/catalog')
+async def catalog_status(request: Request) -> dict:
+    _require_main_computer(request)
+    with db_session() as db:
+        summary = get_catalog_summary(db,ROOT/'data')
+    return {'summary':summary,'update':catalog_updates.status()}
+
+
+@app.post('/api/catalog/updates/check')
+async def check_catalog_updates(request: Request) -> dict:
+    _require_update_action(request)
+    return await asyncio.to_thread(catalog_updates.check,force=True)
+
+
+async def _run_catalog_update(update) -> None:
+    await asyncio.to_thread(catalog_updates.run_reserved,update)
+
+
+@app.post('/api/catalog/updates/install',status_code=202)
+async def install_catalog_update(request: Request) -> dict:
+    _require_update_action(request)
+    try:
+        update = catalog_updates.reserve_download()
+    except UpdateError as error:
+        raise HTTPException(409,str(error)) from None
+    task = asyncio.create_task(_run_catalog_update(update))
+    _catalog_jobs.add(task)
+    task.add_done_callback(_catalog_jobs.discard)
+    return catalog_updates.status()
+
+
+@app.post('/api/catalog/updates/recover')
+async def retry_catalog_recovery(request: Request) -> dict:
+    _require_update_action(request)
+    return await asyncio.to_thread(catalog_updates.recover)
+
+
+@contextmanager
+def _exclusive_catalog_data_change():
+    try:
+        lease = acquire_update_lease(ROOT)
+    except UpdateGuardError as error:
+        raise HTTPException(409,str(error)) from None
+    with lease:
+        try:
+            # Existing installations may configure a DB outside ROOT. Without
+            # an unfinished catalog journal, preserve their ordinary restore
+            # and privacy operations; only catalog installation is unsupported.
+            if checked_catalog_path(ROOT.resolve(),'CatalogUpdates/pending.json').exists():
+                recover_catalog_install(ROOT,database=settings.db_path,lease=lease)
+        except CatalogInstallError:
+            raise HTTPException(409,'Сначала завершите восстановление каталога. Сохраните резервные копии и перезапустите Tonight.') from None
+        yield
 
 
 def _public_session_state(session: dict) -> dict:
@@ -701,7 +767,8 @@ async def reset_taste_profile(user_id: str) -> dict:
 @app.post("/api/backup")
 async def backup(request: Request) -> dict:
     _require_main_computer(request)
-    target = create_backup(settings.db_path, ROOT / "data" / "backups")
+    with _exclusive_catalog_data_change():
+        target = create_backup(settings.db_path, ROOT / "data" / "backups")
     return {"ok": True, "file": str(target.relative_to(ROOT)), "name": target.name}
 
 
@@ -727,13 +794,15 @@ async def restore(backup_name: str, payload: RestoreBackupIn, request: Request) 
     _require_main_computer(request)
     if not payload.confirmed:
         raise HTTPException(400, "Нужно подтвердить восстановление")
-    try:
-        safety = restore_backup(settings.db_path, ROOT / "data" / "backups", backup_name)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    initialize()
-    bootstrap_catalog(ROOT)
-    seed_movies()
+    with _exclusive_catalog_data_change():
+        try:
+            safety = restore_backup(settings.db_path, ROOT / "data" / "backups", backup_name)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        initialize()
+        bootstrap_catalog(ROOT)
+        seed_movies()
+        catalog_updates.recover()
     return {"ok": True, "safety_backup": safety.name}
 
 
@@ -751,21 +820,23 @@ async def import_and_restore_backup(request: Request, confirmed: bool = False) -
     staging = backup_dir / f".uploaded-{secrets.token_hex(12)}.db"
     total = 0
     try:
-        with staging.open("xb") as output:
-            async for chunk in request.stream():
-                total += len(chunk)
-                if total > MAX_IMPORTED_BACKUP_BYTES:
-                    raise HTTPException(400, "Файл копии слишком большой")
-                output.write(chunk)
-        imported = import_backup(backup_dir, staging)
-        safety = restore_backup(settings.db_path, backup_dir, imported.name)
+        with _exclusive_catalog_data_change():
+            with staging.open("xb") as output:
+                async for chunk in request.stream():
+                    total += len(chunk)
+                    if total > MAX_IMPORTED_BACKUP_BYTES:
+                        raise HTTPException(400, "Файл копии слишком большой")
+                    output.write(chunk)
+            imported = import_backup(backup_dir, staging)
+            safety = restore_backup(settings.db_path, backup_dir, imported.name)
+            initialize()
+            bootstrap_catalog(ROOT)
+            seed_movies()
+            catalog_updates.recover()
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     finally:
         staging.unlink(missing_ok=True)
-    initialize()
-    bootstrap_catalog(ROOT)
-    seed_movies()
     return {"ok": True, "imported_backup": imported.name, "safety_backup": safety.name}
 
 
@@ -775,12 +846,13 @@ async def delete_all_personal_data(payload: PrivacyDeleteIn, request: Request) -
     confirmation = "УДАЛИТЬ ВСЕ ДАННЫЕ"
     if not secrets.compare_digest(payload.confirmation.encode("utf-8"), confirmation.encode("utf-8")):
         raise HTTPException(400, "Введите фразу подтверждения полностью")
-    with db_session() as db:
-        session_ids = [row[0] for row in db.execute("SELECT id FROM sessions").fetchall()]
-    try:
-        result = delete_personal_data(settings.db_path, ROOT / "data" / "backups")
-    except PrivacyDeleteError as exc:
-        raise HTTPException(409, str(exc)) from exc
+    with _exclusive_catalog_data_change():
+        with db_session() as db:
+            session_ids = [row[0] for row in db.execute("SELECT id FROM sessions").fetchall()]
+        try:
+            result = delete_personal_data(settings.db_path, ROOT / "data" / "backups")
+        except PrivacyDeleteError as exc:
+            raise HTTPException(409, str(exc)) from exc
     await manager.close_sessions(session_ids, {"type": "privacy_reset"})
     return {"ok": True, **result}
 

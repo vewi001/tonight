@@ -15,6 +15,7 @@ from typing import Callable
 import httpx
 
 from backend.release import MAX_RELEASE_BYTES, ReleaseError, read_release
+from backend.update_guard import acquire_update_lease, UpdateGuardError
 
 LATEST_URL = "https://api.github.com/repos/vewi001/tonight/releases/latest"
 DOWNLOAD_PREFIX = "https://github.com/vewi001/tonight/releases/download/"
@@ -163,6 +164,7 @@ class UpdateManager:
         self._progress = 0
         self._last_check: float | None = None
         self._downloaded: Path | None = None
+        self._lease = None
 
     def status(self) -> dict:
         with self._lock:
@@ -204,6 +206,10 @@ class UpdateManager:
                 raise UpdateError("Обновление уже выполняется. Подождите немного.")
             if self._update is None:
                 raise UpdateError("Сначала проверьте доступность обновления.")
+            try:
+                self._lease = acquire_update_lease(self.root)
+            except UpdateGuardError as error:
+                raise UpdateError(str(error)) from None
             self._phase = "downloading"
             self._message = "Скачиваем обновление…"
             self._progress = 0
@@ -231,5 +237,8 @@ class UpdateManager:
 
     def fail(self, message: str) -> None:
         with self._lock:
+            if self._lease is not None:
+                self._lease.close()
+                self._lease = None
             self._phase = "error"
             self._message = message

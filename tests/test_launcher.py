@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import socket
+from types import SimpleNamespace
+
+import pytest
 
 from launcher import available_port, is_running, server_config, write_running_marker
 
@@ -29,4 +32,38 @@ def test_launcher_running_marker_only_accepts_live_process(tmp_path):
 
 def test_launcher_does_not_require_console_streams_for_server_logging():
     assert server_config(8765).log_config is None
+
+
+@pytest.mark.parametrize("recovery_phase", ["idle", "recovery_error"])
+def test_portable_start_recovers_catalog_before_any_database_preparation(monkeypatch, tmp_path, recovery_phase):
+    import launcher
+
+    events = []
+
+    def recover():
+        events.append("recover")
+        return {"phase": recovery_phase}
+
+    async def offline_health():
+        return {"available": False, "model_installed": False}
+
+    monkeypatch.setattr(launcher, "catalog_updates", SimpleNamespace(recover=recover), raising=False)
+    monkeypatch.setattr(launcher, "ROOT", tmp_path)
+    monkeypatch.setattr(launcher, "initialize", lambda: events.append("initialize"))
+    monkeypatch.setattr(launcher, "bootstrap_catalog", lambda root: events.append("bootstrap"))
+    monkeypatch.setattr(launcher, "seed_movies", lambda: events.append("seed") or 72)
+    monkeypatch.setattr(launcher, "health", offline_health)
+    monkeypatch.setattr(launcher, "available_port", lambda preferred: 8784)
+    monkeypatch.setattr(launcher, "lan_ip", lambda: "127.0.0.1")
+    monkeypatch.setattr(launcher, "_say", lambda *args, **kwargs: None)
+    monkeypatch.setattr(launcher.qrcode.QRCode, "print_ascii", lambda *args, **kwargs: None)
+    monkeypatch.setattr(launcher.uvicorn, "Server", lambda config: SimpleNamespace(run=lambda: events.append("serve")))
+    monkeypatch.setenv("TONIGHT_OPEN_BROWSER", "0")
+    monkeypatch.setenv("TONIGHT_ACTIVE_PORT", "8784")
+
+    launcher.main()
+
+    assert events == ["recover", "initialize", "bootstrap", "seed", "serve"]
+    assert launcher.local_url() is None
+    assert not (tmp_path / "tonight-running.json").exists()
 

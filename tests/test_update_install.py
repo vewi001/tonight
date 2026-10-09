@@ -245,3 +245,41 @@ def test_failed_start_is_stopped_before_caller_can_restore_files(tmp_path, monke
     with pytest.raises(OSError): installer.restart_tonight(tmp_path)
     if os.name == "nt": assert commands[0] == ["taskkill", "/PID", "222", "/T", "/F"]
     assert commands[-1] == "exited"
+
+
+def test_installer_rejects_competing_catalog_job_without_changes_or_restart(tmp_path):
+    from backend.update_guard import acquire_update_lease
+    root,path,update = fixture_package(tmp_path)
+    starts = []
+    with acquire_update_lease(root):
+        with pytest.raises(UpdateError):
+            install_downloaded(root,path,update,pids=[],wait=lambda pids:None,
+                               restart=lambda root:starts.append(root),backup=lambda root:None)
+    assert (root/'Tonight.exe').read_bytes()==b'old' and starts==[]
+
+
+def test_installer_holds_shared_lock_during_restart_and_releases_after_success(tmp_path):
+    from backend.update_guard import acquire_update_lease, UpdateBusyError
+    root,path,update = fixture_package(tmp_path)
+    def restart(root):
+        with pytest.raises(UpdateBusyError):
+            acquire_update_lease(root)
+    install_downloaded(root,path,update,pids=[],wait=lambda pids:None,restart=restart,backup=lambda root:None)
+    with acquire_update_lease(root):
+        pass
+
+
+def test_manual_update_and_rollback_also_reject_competing_job(tmp_path):
+    from backend.update_guard import acquire_update_lease
+    from backend.update_install import apply_manual_release, restore_manual_release
+    root,path,update = fixture_package(tmp_path)
+    with acquire_update_lease(root):
+        with pytest.raises(UpdateError):
+            apply_manual_release(root,path,backup=lambda root:None)
+        with pytest.raises(UpdateError):
+            restore_manual_release(root)
+    assert (root/'Tonight.exe').read_bytes()==b'old'
+    apply_manual_release(root,path,backup=lambda root:None)
+    assert (root/'Tonight.exe').read_bytes()==b'new'
+    restore_manual_release(root)
+    assert (root/'Tonight.exe').read_bytes()==b'old'

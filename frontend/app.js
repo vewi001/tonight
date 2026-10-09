@@ -6,6 +6,7 @@ const state = {
   accessCode: sessionStorage.getItem('tonight:access-code') || '',
   session: null,
   setup: null,
+  catalog: null, catalogTimer: null, catalogError: '', catalogRequest: 0,
   invite: null,
   update: null, updateTimer: null, updateDismissed: sessionStorage.getItem('tonight:update-dismissed') || '', updateInstallingFrom: null,
   view: 'loading',
@@ -110,12 +111,12 @@ function shell(content, { narrow = false, nav = true } = {}) {
   const credits = state.setup?.tmdb_movies ? `<footer class="data-credits" aria-label="Источники данных"><a href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer"><img src="/assets/tmdb.svg" alt="TMDB"></a><span>This product uses the TMDB API but is not endorsed or certified by TMDB.</span></footer>` : '';
   return `<div class="shell">
     ${nav ? `<header class="topbar"><button class="brand" data-view="home">Tonight <span>🍿</span></button><nav class="top-actions" aria-label="Основная навигация">
-      <button class="icon-button" data-view="history">◷ <span class="nav-label">История</span></button><button class="icon-button" data-view="weekly">✦ <span class="nav-label">Неделя</span></button><button class="icon-button" data-view="franchises">≡ <span class="nav-label">Серии</span></button><button class="icon-button" data-view="diagnostics">✓ <span class="nav-label">Проверить</span></button>
+      <button class="icon-button" data-view="history">◷ <span class="nav-label">История</span></button><button class="icon-button" data-view="weekly">✦ <span class="nav-label">Неделя</span></button><button class="icon-button" data-view="franchises">≡ <span class="nav-label">Серии</span></button><button class="icon-button" data-view="diagnostics">✓ <span class="nav-label">Проверить</span></button>${!isRemoteClient() ? '<button class="icon-button" data-view="catalog">▤ <span class="nav-label">Каталог</span></button>' : ''}
       <button class="icon-button" data-view="watchlist">♡ <span class="nav-label">На потом</span></button>
       <button class="icon-button" data-view="taste">♡ <span class="nav-label">Наш вкус</span></button><button class="icon-button" data-view="search">⌕ <span class="nav-label">Найти</span></button>${identity}
     </nav></header>` : ''}
-    <div data-update-banner>${state.view === 'diagnostics' ? '' : updateControls()}</div>
-    <main id="main" class="page ${narrow ? 'narrow' : ''}">${content}${state.view === 'diagnostics' ? `<div data-update-panel>${updateControls(true)}</div>` : ''}</main>
+    <div data-update-banner>${['diagnostics','catalog'].includes(state.view) ? '' : updateControls()}</div>
+    <main id="main" class="page ${narrow ? 'narrow' : ''}">${content}${['diagnostics','catalog'].includes(state.view) ? `<div data-update-panel>${updateControls(true)}</div>` : ''}</main>
     ${credits}
     ${!state.connected && state.user ? '<div class="reconnect">Связь пропала — восстанавливаем…</div>' : ''}
   </div>`;
@@ -134,7 +135,7 @@ function render() {
     setup: renderSetup, home: renderHome, vibe: renderVibe, filters: renderFilters,
     swipe: renderSwipe, waiting: renderWaiting, results: renderResults, quick: renderQuick,
     selected: renderSelected, feedback: renderFeedback, eveningFeedback: renderEveningFeedback, history: renderHistory, weekly: renderWeekly, franchises: renderFranchises, diagnostics: renderDiagnostics,
-    taste: renderTaste, watchlist: renderWatchlist, search: renderSearch, error: renderError,
+    taste: renderTaste, watchlist: renderWatchlist, search: renderSearch, error: renderError, catalog: renderCatalog,
   };
   root.innerHTML = (views[state.view] || renderHome)();
   bindCommon();
@@ -374,8 +375,80 @@ function renderError() {
   return shell(`<section class="waiting"><div><p class="eyebrow">Техническая пауза</p><h2>Tonight не смог загрузиться</h2><p class="lede">${esc(state.error || 'Проверьте, что сервер всё ещё запущен.')}</p><button class="button" data-action="retry">Попробовать снова</button></div></section>`, {nav:false});
 }
 
+function catalogPanel() {
+  if (isRemoteClient()) return '';
+  const summary = state.catalog?.summary;
+  const update = state.catalog?.update || {};
+  const busy = ['checking','downloading','installing'].includes(update.phase);
+  const appBusy = ['downloading','ready','installing'].includes(state.update?.phase);
+  const recovery = update.phase === 'recovery_error';
+  const date = summary?.last_successful_update ? new Date(summary.last_successful_update) : null;
+  const updated = date && !Number.isNaN(date.getTime()) ? date.toLocaleString('ru-RU', {dateStyle:'medium',timeStyle:'short'}) : 'Обновлений пакетом ещё не было';
+  const rows = summary ? `<div class="setup-list">${[
+    ['Фильмов в каталоге',summary.movie_count],['С локальным постером',summary.local_poster_count],
+    ['Со ссылкой на трейлер',summary.trailer_link_count],['С постером и ссылкой на трейлер',summary.poster_and_trailer_count],
+    ['Версия каталога',summary.catalog_version || 'Пакет ещё не установлен'],['Последнее обновление пакетом',updated],
+  ].map(([label,value]) => `<div class="setup-row"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('')}</div>` : '<p class="hint">Сводка каталога пока недоступна.</p>';
+  const percent = update.total_bytes ? Math.min(100,Math.floor((update.download_bytes || 0)/update.total_bytes*100)) : 0;
+  return `<section class="panel"><h2>Ваш локальный каталог</h2>${rows}<p class="hint">Доступность видео не проверена: ссылка на YouTube может перестать работать. Считаем постеры, сохранённые для карточек, без запасных обложек.</p></section>
+    <section class="panel"><h2>Обновление каталога</h2><p>Новые фильмы и недостающие постеры — без TMDB-токена. История, оценки, личные правки и настройки сохранятся. Tonight не перезапустится.</p>
+    <p role="status">${esc(state.catalogError || update.message || 'Проверьте, появился ли новый пакет каталога')}${update.phase === 'downloading' ? ` · ${percent}%` : ''}</p>
+    ${update.phase === 'downloading' ? `<progress aria-label="Загрузка каталога" max="100" value="${percent}"></progress>` : ''}
+    ${update.available_version ? `<p class="hint">Каталог ${esc(update.available_version)} · ${Math.ceil((update.total_bytes || 0)/1024/1024)} МБ. Совместимость проверим до установки.</p>` : ''}
+    <div class="footer-actions"><button class="button secondary" data-catalog-action="check" ${busy || recovery || appBusy ? 'disabled' : ''}>Проверить обновление каталога</button>
+    ${update.available_version && !recovery ? `<button class="button" data-catalog-action="install" ${busy || appBusy ? 'disabled' : ''}>Обновить каталог</button>` : ''}
+    ${recovery ? `<button class="button" data-catalog-action="recover" ${appBusy ? 'disabled' : ''}>Повторить восстановление</button>` : ''}</div></section>`;
+}
+
+function renderCatalog() {
+  return shell(`<section><div class="screen-head"><p class="eyebrow">Фильмы на вашем компьютере</p><h2>Каталог</h2><p class="lede">Каталог обновляется отдельно от Tonight. Интернет не нужен, чтобы выбирать уже сохранённые фильмы.</p></div><div data-catalog-panel>${catalogPanel()}</div></section>`, {narrow:true});
+}
+
+function bindCatalogButtons() {
+  root.querySelectorAll('[data-catalog-action]').forEach(button => button.addEventListener('click', () => catalogAction(button.dataset.catalogAction)));
+}
+
+function catalogNotice() {
+  const panel = root.querySelector('[data-catalog-panel]');
+  if (panel) { panel.innerHTML = catalogPanel(); bindCatalogButtons(); }
+}
+
+async function refreshCatalogStatus() {
+  clearTimeout(state.catalogTimer);
+  if (isRemoteClient()) return;
+  const request = ++state.catalogRequest;
+  try {
+    const result = await api('/api/catalog');
+    if (request !== state.catalogRequest) return;
+    state.catalog = result; state.catalogError = '';
+    if (result.update.phase === 'done' && state.setup) {
+      state.setup.catalog = result.summary.movie_count; state.setup.posters = result.summary.local_poster_count;
+    }
+  } catch (_) {
+    if (request !== state.catalogRequest) return;
+    state.catalogError = 'Не удалось прочитать состояние. Проверьте, что Tonight запущен; можно продолжать вечер.';
+  }
+  catalogNotice();
+  const busy = ['checking','downloading','installing'].includes(state.catalog?.update?.phase);
+  if (state.view === 'catalog' || busy) state.catalogTimer = setTimeout(refreshCatalogStatus,busy ? 1500 : 30000);
+}
+
+async function catalogAction(action) {
+  if (isRemoteClient() || !['check','install','recover'].includes(action)) return;
+  clearTimeout(state.catalogTimer); ++state.catalogRequest;
+  state.catalogError = '';
+  state.catalog ||= {summary:null,update:{}};
+  state.catalog.update = {...state.catalog.update,phase:action === 'install' ? 'downloading' : 'checking',message:action === 'install' ? 'Скачиваем и проверяем каталог…' : 'Проверяем каталог…'};
+  catalogNotice();
+  try { state.catalog.update = await api(`/api/catalog/updates/${action}`,{method:'POST',headers:{'X-Tonight-Update':'1'}}); }
+  catch (error) { state.catalogError = error.message; state.catalog.update.phase = 'error'; }
+  catalogNotice();
+  if (!state.catalogError) await refreshCatalogStatus();
+}
+
 function bindCommon() {
   bindUpdateButtons();
+  bindCatalogButtons();
   root.querySelectorAll('[data-view]').forEach(el => el.addEventListener('click', () => go(el.dataset.view)));
   root.querySelectorAll('[data-user]').forEach(el => el.addEventListener('click', () => selectUser(el.dataset.user)));
   root.querySelector('[data-access-code]')?.addEventListener('input', event => { state.accessCode=event.target.value.replace(/\D/g, '').slice(0,6); event.target.value=state.accessCode; });
@@ -443,6 +516,7 @@ async function go(view) {
   if (view === 'vibe') { state.view='vibe'; render(); return; }
   if (view === 'quick') { state.view='quick'; render(); return; }
   try {
+    if (view === 'catalog' && !isRemoteClient()) { state.view='catalog'; render(); await refreshCatalogStatus(); return; }
     if (view === 'history') { state.history = (await api('/api/history')).items; state.view='history'; render(); return; }
     if (view === 'weekly') { state.weeklyPicks = (await api('/api/weekly-picks')).items; state.view='weekly'; render(); return; }
     if (view === 'franchises') { state.franchises = (await api('/api/franchises')).items; state.view='franchises'; render(); return; }
@@ -916,7 +990,7 @@ function updateControls(manual = false) {
     ${downloading ? `<progress aria-label="Загрузка обновления" max="100" value="${percent}"></progress>` : ''}
     ${offered ? `<p class="hint">${Math.ceil(update.total_bytes / 1024 / 1024)} МБ. После загрузки Tonight перезапустится. История и настройки сохранятся.</p>` : ''}
     ${offered && !update.install_supported ? '<p class="hint">Обновление одной кнопкой доступно в переносимой версии для Windows.</p>' : ''}
-    <div class="footer-actions">${offered ? `<button class="button" data-update-action="install" ${busy || !update.install_supported ? 'disabled' : ''}>Скачать и обновить</button>${!busy ? '<button class="button ghost" data-update-action="dismiss">Не сейчас</button>' : ''}` : ''}
+    <div class="footer-actions">${offered ? `<button class="button" data-update-action="install" ${busy || !update.install_supported ? 'disabled' : ''}>${manual ? 'Обновить приложение' : 'Скачать и обновить'}</button>${!busy ? '<button class="button ghost" data-update-action="dismiss">Не сейчас</button>' : ''}` : ''}
     ${manual ? `<button class="button secondary" data-update-action="check" ${busy ? 'disabled' : ''}>${update?.phase === 'checking' ? 'Проверяем…' : 'Проверить обновления'}</button>` : ''}</div></aside>`;
 }
 
@@ -932,7 +1006,7 @@ function bindUpdateButtons() {
 
 function updateNotice() {
   const banner = root.querySelector('[data-update-banner]');
-  if (banner) banner.innerHTML = state.view === 'diagnostics' ? '' : updateControls();
+  if (banner) banner.innerHTML = ['diagnostics','catalog'].includes(state.view) ? '' : updateControls();
   const panel = root.querySelector('[data-update-panel]');
   if (panel) panel.innerHTML = updateControls(true);
   bindUpdateButtons();

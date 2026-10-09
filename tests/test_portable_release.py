@@ -67,6 +67,12 @@ def test_rejects_archive_with_path_outside_program_folder(tmp_path: Path):
         apply_release(tmp_path / "Tonight", archive, backup=lambda _: None)
 
 
+def test_update_archive_cannot_replace_shared_lock_file(tmp_path):
+    archive = _archive(tmp_path/'unsafe-lock.zip',files={'.tonight-update.lock':'replace lock'})
+    with pytest.raises(ReleaseError):
+        read_release(archive)
+
+
 def test_rejects_windows_style_path_outside_program_folder(tmp_path: Path):
     archive = tmp_path / "unsafe-windows.zip"
     with zipfile.ZipFile(archive, "w") as bundle:

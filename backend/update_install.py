@@ -212,9 +212,32 @@ def accept_handoff(root: Path, package: Path, update: AvailableUpdate, signal: P
     raise UpdateError("Запуск обновления отменён. Tonight не изменён.")
 
 
+def _update_lease(root: Path):
+    from backend.update_guard import acquire_update_lease, UpdateGuardError
+    try:
+        return acquire_update_lease(root)
+    except UpdateGuardError as error:
+        raise UpdateError(str(error)) from None
+
+
+def apply_manual_release(root: Path, package: Path, *, backup=None):
+    with _update_lease(root):
+        return apply_release(root,package,backup=backup)
+
+
+def restore_manual_release(root: Path) -> None:
+    with _update_lease(root):
+        rollback_previous(root)
+
+
 def install_downloaded(root: Path, package: Path, update: AvailableUpdate, *, pids: list[int],
                        wait: Callable = wait_for_processes, restart: Callable = restart_tonight, backup=None):
     wait(pids)
+    with _update_lease(root):
+        return _install_downloaded_locked(root,package,update,restart=restart,backup=backup)
+
+
+def _install_downloaded_locked(root: Path, package: Path, update: AvailableUpdate, *, restart: Callable, backup=None):
     root = root.resolve()
     try:
         _validate_package(root, package, update)

@@ -15,8 +15,8 @@ from backend.backups import create_backup
 
 MANIFEST_NAME = "tonight-release.json"
 RELEASE_FORMAT = 1
-APP_VERSION = "1.6.5"
-PRESERVED_NAMES = {".env", ".venv", "data", "outputs", "work", "rollback", "updates", ".pytest_cache", "__pycache__"}
+APP_VERSION = "1.6.6"
+PRESERVED_NAMES = {".env", ".venv", "data", "outputs", "work", "rollback", "updates", ".pytest_cache", "__pycache__", ".tonight-update.lock", "catalogupdates", "catalogdownloads"}
 MAX_RELEASE_FILES = 10_000
 MAX_RELEASE_BYTES = 500 * 1024 * 1024
 PORTABLE_PUBLIC_FILES = ("Tonight.exe", "Обновить Tonight.exe", ".env.example", "README.txt", "PRIVACY.txt")

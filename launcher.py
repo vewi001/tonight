@@ -14,7 +14,7 @@ import uvicorn
 from backend.config import ROOT, settings
 from backend.catalog_bundle import bootstrap_catalog
 from backend.database.db import initialize
-from backend.main import app, set_update_shutdown, updates
+from backend.main import app, catalog_updates, set_update_shutdown, updates
 from backend.movies.seed import seed_movies
 from backend.network import lan_ip
 from backend.ollama.client import health
@@ -71,6 +71,10 @@ def main() -> None:
     global _server, _local_url
     _stop_requested.clear()
     set_update_shutdown(stop)
+    # The desktop entry point prepares the database before ASGI lifespan runs.
+    # Recover interrupted catalog transactions before touching that database.
+    # A blocked recovery is reported in Catalog, not a reason to block an evening.
+    catalog_updates.recover()
     initialize()
     bootstrap_catalog(ROOT)
     count = seed_movies()
