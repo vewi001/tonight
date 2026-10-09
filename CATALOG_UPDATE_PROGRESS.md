@@ -587,3 +587,36 @@
   done/preservation после неё. Не перепубликовывать assets, не двигать теги.
   Для обычного запуска теперь пользовательская Portable Tonight/Tonight.exe 1.6.6.
   Квота: 20% окна/13% недели; reset не использован.
+
+## 10.10.2026 — публичная end-to-end проверка завершена
+
+- Предыдущий goal-turn классифицирован как progress: опубликованы код и оба
+  релиза, обновлена пользовательская portable, подтверждены public digest/Latest.
+  Тогда full public install оставался незавершённым; это не было completion.
+- Перед повтором прочитан актуальный objective/checklist; Git чистый, прежние
+  servers stopped. Запущен новый production Tonight.exe (без fixture/mock HTTP)
+  в work/public-catalog-1.0.0-jigg71da, token пустой, port 8791. Check обнаружил
+  реальный public catalog-v1.0.0; install полностью получил 314265585 bytes.
+  Во время проверки 100% загрузки UI ещё не объявлял успех; далее installing,
+  затем done после окончательной установки. Вторая загрузка была быстрее;
+  предыдущая малая скорость не считается постоянной характеристикой продукта.
+- Browser success: 649 films, 644 local posters, 571 trailer links, 568 both,
+  catalog 1.0.0, дата successful update. Прежняя история/оценка отображаются;
+  console errors []. Screenshot work/catalog-public-install-success.jpg.
+- Driver session 42159 завершён Enter после done: PASS PUBLIC production catalog,
+  реальные public GitHub download/install, сохранены история/ratings/watchlist/
+  genre exclusions/own description/private setting/env/venv, FK clean, backup
+  существует, pending journal удалён. Exit 0, OWNED PROCESS STOPPED. Проверка
+  listeners 8771/8784-8792 пуста; вкладка закрыта.
+- Producer повторно построил полный пакет из того же source data с фиксированным
+  created_at и подтверждёнными media flags. Session 53126 exit 0. Полный ZIP в
+  work/catalog-package-1.0.0-repeat/Tonight-catalog-1.0.0.zip имеет SHA-256
+  217c4c9e0b2681c952e786ecaa7a25013c8168c1152e3d871a090e44857d38bc,
+  идентичный опубликованному candidate; доказана reproducibility с media.
+- Requirement audit CATALOG_RELEASE_CHECKLIST.md завершён: package/merge/safety/
+  UI/API/backup/recovery/portable/public delivery доказаны. Production code не
+  менялся после финального pytest 375 passed (45.87 с); node/diff PASS. Не
+  утверждаем физическое отключение питания или доступность YouTube-видео.
+- Финальные документы синхронизировать с пользовательской копией и отправить
+  в main; assets и release tags не изменять. После проверки sync/servers можно
+  завершить цель. Обычный запуск — Portable Tonight/Tonight.exe версии 1.6.6.
