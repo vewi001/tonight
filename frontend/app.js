@@ -10,6 +10,7 @@ const state = {
   invite: null,
   update: null, updateTimer: null, updateDismissed: sessionStorage.getItem('tonight:update-dismissed') || '', updateInstallingFrom: null,
   view: 'loading',
+  searchDraft: null, navigationRequest: 0,
   presence: { lera: false, nikita: false },
   connected: true,
   prefs: { moods: [], energy: null, max_runtime: 120, min_year: 2000, disliked_genres: [] },
@@ -110,7 +111,7 @@ function shell(content, { narrow = false, nav = true } = {}) {
   const identity = state.user ? `<button class="icon-button identity-pill" data-action="switch-user" title="Сменить пользователя">${emojis[state.user]} <span>${names[state.user]}</span></button>` : '';
   const credits = state.setup?.tmdb_movies ? `<footer class="data-credits" aria-label="Источники данных"><a href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer"><img src="/assets/tmdb.svg" alt="TMDB"></a><span>This product uses the TMDB API but is not endorsed or certified by TMDB.</span></footer>` : '';
   return `<div class="shell">
-    ${nav ? `<header class="topbar"><button class="brand" data-view="home">Tonight <span>🍿</span></button><nav class="top-actions" aria-label="Основная навигация">
+    ${nav ? `<header class="topbar"><button class="brand" data-view="home">Tonight <span>🍿</span></button><button class="icon-button nav-toggle" data-action="toggle-nav" aria-expanded="${!!state.navOpen}" aria-controls="main-navigation">Разделы ${state.navOpen ? '−' : '+'}</button><nav id="main-navigation" class="top-actions ${state.navOpen ? 'is-open' : ''}" aria-label="Основная навигация">
       <button class="icon-button" data-view="history">◷ <span class="nav-label">История</span></button><button class="icon-button" data-view="weekly">✦ <span class="nav-label">Неделя</span></button><button class="icon-button" data-view="franchises">≡ <span class="nav-label">Серии</span></button><button class="icon-button" data-view="diagnostics">✓ <span class="nav-label">Проверить</span></button>${!isRemoteClient() ? '<button class="icon-button" data-view="catalog">▤ <span class="nav-label">Каталог</span></button>' : ''}
       <button class="icon-button" data-view="watchlist">♡ <span class="nav-label">На потом</span></button>
       <button class="icon-button" data-view="taste">♡ <span class="nav-label">Наш вкус</span></button><button class="icon-button" data-view="search">⌕ <span class="nav-label">Найти</span></button>${identity}
@@ -118,16 +119,42 @@ function shell(content, { narrow = false, nav = true } = {}) {
     <div data-update-banner>${['diagnostics','catalog'].includes(state.view) ? '' : updateControls()}</div>
     <main id="main" class="page ${narrow ? 'narrow' : ''}">${content}${['diagnostics','catalog'].includes(state.view) ? `<div data-update-panel>${updateControls(true)}</div>` : ''}</main>
     ${credits}
-    ${!state.connected && state.user ? '<div class="reconnect">Связь пропала — восстанавливаем…</div>' : ''}
+    <div data-connection-status role="status">${connectionNotice()}</div>
   </div>`;
+}
+
+function connectionNotice() {
+  return !state.connected && state.user ? '<div class="reconnect">Связь пропала — восстанавливаем…</div>' : '';
+}
+
+function renderRealtime() {
+  const active = document.activeElement;
+  // Keep the actual input node alive: replacing it can dismiss a phone keyboard.
+  // A server-driven step change still takes precedence over this local draft.
+  if (render.lastView === state.view && active?.matches('input:not([type="file"]), textarea, select')) {
+    const notice = root.querySelector('[data-connection-status]');
+    if (notice) notice.innerHTML = connectionNotice();
+    if (!active.dataset.repaintPending) {
+      active.dataset.repaintPending = '1';
+      active.addEventListener('blur', event => {
+        delete active.dataset.repaintPending;
+        // Do not replace the button between pointerdown (blur) and click.
+        if (event.relatedTarget?.closest('button, a, label')) return;
+        setTimeout(() => { if (active.isConnected) renderRealtime(); }, 0);
+      }, {once:true});
+    }
+    return;
+  }
+  render();
 }
 
 function render() {
   clearTimeout(state.waitTimer);
   const viewChanged = render.lastView !== state.view;
+  if (viewChanged) state.navOpen = false;
   render.lastView = state.view;
   if (state.view === 'loading') {
-    root.innerHTML = shell('<div class="hero-home"><div class="skeleton"></div></div>', { nav:false });
+    root.innerHTML = shell('<div class="hero-home" role="status" aria-label="Открываем Tonight"><div class="skeleton"></div><p>Открываем Tonight…</p></div>', { nav:false });
     if (viewChanged) requestAnimationFrame(() => window.scrollTo(0, 0));
     return;
   }
@@ -196,7 +223,7 @@ function renderHome() {
   else if (s?.status === 'selected') { title = 'Фильм на сегодня выбран'; cta = 'Показать выбор'; }
   else if (s?.participants?.[state.user]?.ready) { title = `Готово, ${names[state.user]}!`; cta = 'Вернуться к ожиданию'; }
   else if (s?.participants?.[state.user]?.energy) { title = 'Продолжим с того же места?'; cta = 'Продолжить выбор'; }
-  return shell(`<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">${esc(s?.title || 'Сегодня')}</p><h1>${title}</h1><p class="lede">Пара минут на настроение и реакции — дальше ищем фильм, который не придётся терпеть никому.</p></div>
+  return shell(`<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">${esc(s?.title || 'Сегодня')}</p><h1>${title}</h1><p class="lede">Выберите настроение и отметьте знакомые фильмы — дальше ищем вариант, который понравится обоим.</p></div>
     <div class="panel"><div class="presence" style="margin-bottom:1.5rem">${participantLine('lera')}${participantLine('nikita')}</div><button class="button large" data-action="continue-session">${cta}</button>${s?.status === 'choosing' && !s?.participants?.[state.user]?.energy ? '<button class="button ghost" data-view="quick">⚡ Быстрый вечер</button>' : ''}<p class="hint">${esc(catalogUpdatedText())} · тренды, популярное и классика</p></div>${inviteCard()}
   </section>`);
 }
@@ -258,6 +285,13 @@ function renderWaiting() {
     <div class="status-cards"><div class="status-card">${emojis[state.user]} ${names[state.user]}<br><strong class="ok">готов 🍿</strong></div><div class="status-card">${emojis[other]} ${names[other]}<br><strong>${op.ready?'готов 🍿':`${op.progress || 0} / ${state.total}`}</strong></div></div>${recovery}</div></section>`);
 }
 
+function movieDescription(description) {
+  const full = String(description || 'Описание пока не добавлено');
+  if (full.length <= 220) return `<p class="lede movie-summary">${esc(full)}</p>`;
+  const excerpt = full.slice(0, 200).replace(/\s+\S*$/, '') + '…';
+  return `<p class="lede movie-summary">${esc(excerpt)}</p><details class="movie-description"><summary>Полное описание</summary><p>${esc(full)}</p></details>`;
+}
+
 function renderResults() {
   const list = state.session?.recommendations || [];
   if (!list.length) return renderWaiting();
@@ -272,13 +306,13 @@ function renderResults() {
   const excluded = context.excluded_genres || [];
   const stopGenresRespected = main.stop_genres_respected !== false;
   const relaxedText = context.relaxed_constraints?.length ? `Чтобы выбор не оказался пустым, мы расширили: ${context.relaxed_constraints.join(' и ')}. Стоп-жанры остались исключены.` : '';
-  return shell(`<section><div class="result-hero"><img src="${main.backdrop_url}" alt=""><div class="result-content"><span class="match">${main.match}% мэтч</span><p class="eyebrow">Кажется, у нас мэтч 🍿</p><h1>${esc(main.title)}</h1><div class="meta"><span>${main.year}</span><span>•</span><span>${main.runtime} мин</span><span>•</span><span>${main.genres.join(' · ')}</span><span>★ ${main.rating}</span></div><p class="lede" style="margin-top:1rem">${esc(main.overview)}</p><div class="footer-actions" style="justify-content:flex-start">${trailerButton(main)}</div></div></div>
+  return shell(`<section><div class="result-hero"><img src="${main.backdrop_url}" alt=""><div class="result-content"><span class="match">${main.match}% мэтч</span><p class="eyebrow">Кажется, у нас мэтч 🍿</p><h1>${esc(main.title)}</h1><div class="meta"><span>${main.year}</span><span>•</span><span>${main.runtime} мин</span><span>•</span><span>${main.genres.join(' · ')}</span><span>★ ${main.rating}</span></div>${movieDescription(main.overview)}<div class="footer-actions" style="justify-content:flex-start">${trailerButton(main)}</div></div></div>
     <h2 class="section-title">Почему выбрали этот фильм</h2><ul class="reason-list">${reasons.map(reason => `<li class="reason">✓ ${esc(reason)}</li>`).join('')}</ul>
     <div class="${stopGenresRespected ? 'filter-proof' : 'constraint-warning'}"><strong>${stopGenresRespected ? 'Стоп-жанры учтены ✓' : 'Этот вариант не прошёл проверку стоп-жанров'}</strong><p>${stopGenresRespected ? (excluded.length ? `В фильме нет: ${esc(excluded.join(', '))}.` : 'Сегодня вы не выбирали стоп-жанры.') : 'Начните выбор заново — такой фильм не должен попадать в результат.'}</p></div>
     ${relaxedText ? `<div class="constraint-warning"><strong>Немного расширили поиск</strong><p>${esc(relaxedText)}</p></div>` : ''}
     <details class="method"><summary>Как Tonight выбирает фильм</summary><p>Сначала убирает стоп-жанры, затем учитывает ваши сегодняшние реакции и ищет вариант, который подойдёт вам обоим.</p></details>
+    <div class="killer"><div><p class="eyebrow">Вариант на вечер</p><h2>Смотрим вместе?</h2></div><div class="footer-actions"><button class="button large" data-action="accept-main" data-movie-id="${main.id}">✅ Да, смотрим это</button><button class="button secondary" data-action="save-later" data-movie-id="${main.id}">♡ На потом</button><button class="button secondary" data-action="choose">🎲 Выбери за нас</button><button class="button ghost" data-action="restart-session">↻ Выбрать заново</button></div></div>
     <h2 class="section-title">Ещё может зайти</h2><div class="movie-rail">${list.slice(1,6).map(m => `<button class="mini-movie" data-movie="${m.id}"><img src="${m.poster_url}" alt=""><strong>${esc(m.title)}</strong><small>${m.match}% · ${m.year}</small><span class="mini-overview">${esc(m.overview || 'Короткое описание появится после обновления каталога')}</span></button>`).join('')}</div>
-    <div class="killer"><div><p class="eyebrow">Никаких переговоров</p><h2>Компромисс найден.<br>Отношения спасены.</h2></div><div class="footer-actions"><button class="button large" data-action="accept-main" data-movie-id="${main.id}">✅ Да, смотрим это</button><button class="button secondary" data-action="save-later" data-movie-id="${main.id}">♡ На потом</button><button class="button secondary" data-action="choose">🎲 Выбери за нас</button><button class="button ghost" data-action="restart-session">↻ Выбрать заново</button></div></div>
   </section>`);
 }
 
@@ -286,7 +320,7 @@ function renderSelected() {
   const movie = state.session?.selected;
   if (!movie) return renderResults();
   const traits = similarityTraits(movie);
-  return shell(`<section class="selected-layout"><img class="selected-poster" src="${movie.poster_url}" alt="Постер ${esc(movie.title)}"><div><p class="eyebrow">Финальное решение</p><h1>${esc(movie.title)}</h1><div class="meta"><span>${movie.year}</span><span>•</span><span>${movie.runtime} мин</span><span>•</span><span>${movie.genres.join(' · ')}</span></div><p class="lede" style="margin-top:1.2rem">${esc(movie.overview)}</p><p class="hint">Будем смотреть? Если да — после просмотра оба поставят свою оценку, и Tonight учтёт её в следующих рекомендациях.</p><div class="footer-actions" style="justify-content:flex-start">${trailerButton(movie)}<button class="button large" data-action="watched">✅ Будем смотреть</button><button class="button secondary large" data-action="decline">✋ Не смотрим</button><button class="button ghost" data-action="choose-another">🎲 Другой вариант</button></div>
+  return shell(`<section class="selected-layout"><img class="selected-poster" src="${movie.poster_url}" alt="Постер ${esc(movie.title)}"><div><p class="eyebrow">Финальное решение</p><h1>${esc(movie.title)}</h1><div class="meta"><span>${movie.year}</span><span>•</span><span>${movie.runtime} мин</span><span>•</span><span>${movie.genres.join(' · ')}</span></div>${movieDescription(movie.overview)}<p class="hint">Будем смотреть? Если да — после просмотра оба поставят свою оценку, и Tonight учтёт её в следующих рекомендациях.</p><div class="footer-actions" style="justify-content:flex-start">${trailerButton(movie)}<button class="button large" data-action="watched">✅ Будем смотреть</button><button class="button secondary large" data-action="decline">✋ Не смотрим</button><button class="button ghost" data-action="choose-another">🎲 Другой вариант</button></div>
     <details class="avoid-box"><summary>🚫 Не предлагать похожее</summary><p>Это сильнее обычного «не смотрим». Ослабим в будущих рекомендациях:</p><ul><li><strong>Сочетание жанров:</strong> ${esc(traits.genres.join(', ') || 'как у этого фильма')}</li><li><strong>Настроение:</strong> ${esc(traits.moods.join(', ') || 'похожее')}</li>${traits.franchise ? '<li><strong>Франшизу:</strong> следующие части этой серии</li>' : ''}</ul><p class="hint">Целый жанр не будет заблокирован. Действие можно отменить в «Наш вкус».</p><button class="button secondary" data-action="confirm-avoid-similar">Подтвердить и выбрать другой</button></details>
     </div></section>`);
 }
@@ -446,9 +480,33 @@ async function catalogAction(action) {
   if (!state.catalogError) await refreshCatalogStatus();
 }
 
+function refreshWatchlistResults() {
+  const current = root.querySelector('.watchlist-filters')?.nextElementSibling;
+  if (!current) return;
+  const template = document.createElement('template');
+  template.innerHTML = renderWatchlist();
+  const replacement = template.content.querySelector('.watchlist-filters').nextElementSibling;
+  current.replaceWith(replacement);
+  replacement.querySelectorAll('[data-action="watch-saved"]').forEach(el => el.addEventListener('click', () => watchSavedMovie(el.dataset.movieId)));
+  replacement.querySelectorAll('[data-action="remove-later"]').forEach(el => el.addEventListener('click', () => removeFromWatchlist(el.dataset.movieId)));
+  replacement.querySelector('[data-action="reset-watchlist-filters"]')?.addEventListener('click', () => { state.watchlistQuery=''; state.watchlistGenre=''; render(); });
+}
+
 function bindCommon() {
   bindUpdateButtons();
   bindCatalogButtons();
+  const navToggle = root.querySelector('[data-action="toggle-nav"]');
+  const navigation = root.querySelector('#main-navigation');
+  const setNavigation = open => {
+    state.navOpen = open;
+    navigation?.classList.toggle('is-open', open);
+    navToggle?.setAttribute('aria-expanded', String(open));
+    if (navToggle) navToggle.textContent = `Разделы ${open ? '−' : '+'}`;
+  };
+  navToggle?.addEventListener('click', () => setNavigation(!state.navOpen));
+  navigation?.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { setNavigation(false); navToggle?.focus(); }
+  });
   root.querySelectorAll('[data-view]').forEach(el => el.addEventListener('click', () => go(el.dataset.view)));
   root.querySelectorAll('[data-user]').forEach(el => el.addEventListener('click', () => selectUser(el.dataset.user)));
   root.querySelector('[data-access-code]')?.addEventListener('input', event => { state.accessCode=event.target.value.replace(/\D/g, '').slice(0,6); event.target.value=state.accessCode; });
@@ -478,8 +536,8 @@ function bindCommon() {
   root.querySelectorAll('[data-action="select-weekly"]').forEach(el => el.addEventListener('click', () => selectSearchResult(el.dataset.movieId)));
   root.querySelectorAll('[data-action="select-franchise"]').forEach(el => el.addEventListener('click', () => selectSearchResult(el.dataset.movieId)));
   root.querySelector('[data-action="copy-diagnostics"]')?.addEventListener('click', copyDiagnostics);
-  root.querySelector('[data-watchlist-search]')?.addEventListener('input', event => { state.watchlistQuery=event.target.value; render(); });
-  root.querySelector('[data-watchlist-genre]')?.addEventListener('change', event => { state.watchlistGenre=event.target.value; render(); });
+  root.querySelector('[data-watchlist-search]')?.addEventListener('input', event => { state.watchlistQuery=event.target.value; refreshWatchlistResults(); });
+  root.querySelector('[data-watchlist-genre]')?.addEventListener('change', event => { state.watchlistGenre=event.target.value; refreshWatchlistResults(); });
   root.querySelector('[data-action="reset-watchlist-filters"]')?.addEventListener('click', () => { state.watchlistQuery=''; state.watchlistGenre=''; render(); });
   root.querySelector('[data-action="choose-another"]')?.addEventListener('click', chooseAnother);
   root.querySelector('[data-action="watched"]')?.addEventListener('click', watched);
@@ -497,6 +555,12 @@ function bindCommon() {
   root.querySelectorAll('[data-feedback]').forEach(el => el.addEventListener('click', () => saveFeedback(Number(el.dataset.feedback))));
   root.querySelectorAll('[data-evening-fit]').forEach(el => el.addEventListener('click', () => saveEveningFeedback(el.dataset.eveningFit === 'true')));
   root.querySelector('[data-action="skip-evening-feedback"]')?.addEventListener('click', () => { state.view='home'; render(); });
+  const searchInput = root.querySelector('[data-action="search-catalog"] input[name="query"]');
+  if (searchInput) {
+    searchInput.setAttribute('aria-label', 'Название или пример фильма');
+    searchInput.value = state.searchDraft ?? state.searchQuery;
+    searchInput.addEventListener('input', event => { state.searchDraft = event.target.value; });
+  }
   root.querySelector('[data-action="search-catalog"]')?.addEventListener('submit', event => { event.preventDefault(); searchCatalog(new FormData(event.currentTarget).get('query')); });
   root.querySelectorAll('[data-action="select-search-result"]').forEach(el => el.addEventListener('click', () => selectSearchResult(el.dataset.movieId)));
   root.querySelector('[data-action="retry"]')?.addEventListener('click', init);
@@ -511,20 +575,24 @@ function joinBody(user) {
 }
 
 async function go(view) {
+  const request = ++state.navigationRequest;
+  const previousView = state.view;
   state.modal = null;
   if (view === 'home') { state.view='home'; render(); return; }
   if (view === 'vibe') { state.view='vibe'; render(); return; }
   if (view === 'quick') { state.view='quick'; render(); return; }
   try {
     if (view === 'catalog' && !isRemoteClient()) { state.view='catalog'; render(); await refreshCatalogStatus(); return; }
-    if (view === 'history') { state.history = (await api('/api/history')).items; state.view='history'; render(); return; }
-    if (view === 'weekly') { state.weeklyPicks = (await api('/api/weekly-picks')).items; state.view='weekly'; render(); return; }
-    if (view === 'franchises') { state.franchises = (await api('/api/franchises')).items; state.view='franchises'; render(); return; }
-    if (view === 'diagnostics') { const usageRequest = isRemoteClient() ? null : api('/api/usage-summary').catch(() => null); const [diagnostics, usage] = await Promise.all([api('/api/diagnostics'), usageRequest]); state.diagnostics=diagnostics; state.usageSummary=usage; state.view='diagnostics'; render(); return; }
-    if (view === 'taste') { const backupRequest = isRemoteClient() ? null : api('/api/backups'); const [taste, backups] = await Promise.all([api('/api/taste'), backupRequest]); state.taste = taste; state.backups = backups?.items || []; state.view='taste'; render(); }
-    if (view === 'search') { state.view='search'; render(); }
-    if (view === 'watchlist') { state.watchlist = (await api('/api/watchlist')).items; state.view='watchlist'; render(); }
-  } catch (e) { toast(e.message); }
+    let changes;
+    if (view === 'history') changes = {history:(await api('/api/history')).items};
+    if (view === 'weekly') changes = {weeklyPicks:(await api('/api/weekly-picks')).items};
+    if (view === 'franchises') changes = {franchises:(await api('/api/franchises')).items};
+    if (view === 'diagnostics') { const usageRequest = isRemoteClient() ? null : api('/api/usage-summary').catch(() => null); const [diagnostics, usage] = await Promise.all([api('/api/diagnostics'), usageRequest]); changes={diagnostics,usageSummary:usage}; }
+    if (view === 'taste') { const backupRequest = isRemoteClient() ? null : api('/api/backups'); const [taste, backups] = await Promise.all([api('/api/taste'), backupRequest]); changes={taste,backups:backups?.items || []}; }
+    if (view === 'search') changes = {};
+    if (view === 'watchlist') changes = {watchlist:(await api('/api/watchlist')).items};
+    if (changes && request === state.navigationRequest && previousView === state.view) { Object.assign(state, changes); state.view=view; render(); }
+  } catch (e) { if (request === state.navigationRequest && previousView === state.view) toast(e.message); }
 }
 
 async function startQuickEvening(id) {
@@ -834,6 +902,7 @@ async function saveEveningFeedback(fit) {
 
 async function searchCatalog(query) {
   state.searchQuery = String(query || '').trim();
+  state.searchDraft = String(query || '');
   if (!state.searchQuery) { state.searchResults=[]; render(); return; }
   try { state.searchResults = (await api(`/api/movies/search?q=${encodeURIComponent(state.searchQuery)}`)).items; render(); }
   catch(e) { toast(e.message); }
@@ -898,10 +967,11 @@ function renderDeferDialog() {
 function applyRealtimeSession(nextSession) {
   if (!nextSession) return;
   if (nextSession.status === 'abandoned') { followRestartedSession(); return; }
+  const previousStatus = state.session?.status;
   state.session = nextSession;
   if (nextSession.status === 'recommended' && state.view === 'waiting') state.view = 'results';
   if (nextSession.status === 'selected' && ['results','waiting'].includes(state.view)) state.view = 'selected';
-  if (nextSession.status === 'completed') openPendingFeedback();
+  if (nextSession.status === 'completed' && previousStatus !== 'completed' && ['selected','results','waiting','swipe'].includes(state.view)) openPendingFeedback();
 }
 
 async function restoreAfterReconnect(ws, recovered) {
@@ -918,7 +988,7 @@ async function restoreAfterReconnect(ws, recovered) {
       return;
     }
     state.connected = true; state.reconnectAttempts = 0; state.wasDisconnected = false;
-    render();
+    renderRealtime();
     if (recovered) {
       toast('Связь восстановлена ✓');
       if (isRemoteClient()) api(`/api/sessions/${active.id}/connection-restored`, {method:'POST'}).catch(() => {});
@@ -934,16 +1004,20 @@ function connectWs() {
   state.ws?.close();
   const protocol=location.protocol==='https:'?'wss':'ws'; const accessQuery=isRemoteClient() && state.accessCode ? `?code=${encodeURIComponent(state.accessCode)}` : ''; const ws=new WebSocket(`${protocol}://${location.host}/ws/session/${state.session.id}/${state.user}${accessQuery}`); state.ws=ws;
   ws.onopen=()=>{const recovered=state.wasDisconnected; ws.pinger=setInterval(()=>{if(ws.readyState===1)ws.send('ping')},20000); restoreAfterReconnect(ws,recovered);};
-  ws.onmessage=e=>{ const data=JSON.parse(e.data); if(data.type==='privacy_reset'){forgetLocalViewer();state.ws=null;toast('Личные данные удалены на основном компьютере');setTimeout(()=>location.reload(),700);return;} if(!data.presence && !data.session) return; if(data.presence)state.presence=data.presence; if(data.session)applyRealtimeSession(data.session); render(); };
+  ws.onmessage=e=>{ const data=JSON.parse(e.data); if(data.type==='privacy_reset'){forgetLocalViewer();state.ws=null;toast('Личные данные удалены на основном компьютере');setTimeout(()=>location.reload(),700);return;} if(!data.presence && !data.session) return; if(data.presence)state.presence=data.presence; if(data.session)applyRealtimeSession(data.session); renderRealtime(); };
   ws.onerror=()=>{};
-  ws.onclose=event=>{clearInterval(ws.pinger); if(state.ws!==ws)return; if(event.code===1008 && isRemoteClient()){state.user=null;state.accessCode='';localStorage.removeItem('tonight:user');sessionStorage.removeItem('tonight:access-code');state.view='home';toast('Нужен код с экрана Tonight');render();return;} state.connected=false;state.wasDisconnected=true;render();const delay=Math.min(12000,1200*(2**Math.min(state.reconnectAttempts,3)));state.reconnectAttempts+=1;state.reconnectTimer=setTimeout(()=>{if(state.user&&state.ws===ws)connectWs();},delay);};
+  ws.onclose=event=>{clearInterval(ws.pinger); if(state.ws!==ws)return; if(event.code===1008 && isRemoteClient()){state.user=null;state.accessCode='';localStorage.removeItem('tonight:user');sessionStorage.removeItem('tonight:access-code');state.view='home';toast('Нужен код с экрана Tonight');render();return;} state.connected=false;state.wasDisconnected=true;renderRealtime();const delay=Math.min(12000,1200*(2**Math.min(state.reconnectAttempts,3)));state.reconnectAttempts+=1;state.reconnectTimer=setTimeout(()=>{if(state.user&&state.ws===ws)connectWs();},delay);};
 }
 
 async function openPendingFeedback() {
   if (!state.user || !state.session) return;
+  const sessionId = state.session.id;
+  const view = state.view;
+  const user = state.user;
   try {
     const history = await api('/api/history');
-    const pending = history.items.find(item => item.session_id === state.session.id && item.ratings[state.user] == null);
+    if (state.session?.id !== sessionId || state.user !== user || state.view !== view) return;
+    const pending = history.items.find(item => item.session_id === sessionId && item.ratings[user] == null);
     if (pending) { state.historyId = pending.history_id; state.view = 'feedback'; render(); }
   } catch (_) {}
 }
