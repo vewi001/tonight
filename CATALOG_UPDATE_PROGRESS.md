@@ -622,3 +622,8 @@
   документы отправлены в main. Assets и release tags остались неизменными.
   Требуемой незавершённой работы нет. Обычный запуск —
   Portable Tonight/Tonight.exe версии 1.6.6.
+# Этап надёжной доставки 14.10.2026
+
+Manifest-first, Range/повторы/сохранение partial, 416 тестов, browser failures
+и реальный production EXE с публичным пакетом 1.1.0 подтверждены отдельно:
+[CATALOG_DELIVERY_PROGRESS.md](CATALOG_DELIVERY_PROGRESS.md).

@@ -6,15 +6,14 @@ from dataclasses import replace
 from pathlib import Path
 import threading
 import time
-import uuid
+import sqlite3
 
 from backend.auto_update import UpdateError
 from backend.catalog_discovery import fetch_catalog_update
-from backend.catalog_download import CatalogCompatibilityUpdateError, CatalogIntegrityUpdateError, download_catalog
+from backend.catalog_download import CatalogCompatibilityUpdateError, CatalogIntegrityUpdateError, CatalogDownloadInterrupted, download_catalog
 from backend.catalog_install import install_catalog
 from backend.catalog_package import _version
 from backend.catalog_recovery import CatalogRecoveryError, checked, paths, recover_catalog_install
-from backend.database.db import connect
 from backend.update_guard import acquire_update_lease, UpdateGuardError
 
 ACTIVE = {'checking','downloading','installing'}
@@ -34,18 +33,20 @@ class CatalogUpdateManager:
         self._last_check = None
         self._lease = None
         self._worker_claimed = False
+        self._can_resume = False
 
     def status(self):
         with self._lock:
             return {'current_version':self._current,'available_version':self._update.version if self._update else None,
                     'phase':self._phase,'download_bytes':self._progress,
-                    'total_bytes':self._update.size if self._update else None,'message':self._message}
+                    'total_bytes':self._update.size if self._update else None,'message':self._message,
+                    'can_resume':self._can_resume}
 
     def _read_current(self):
         paths(self.root,self.database)
         if not self.database.is_file():
             return None  # Startup recovery precedes initial DB creation.
-        with closing(connect(self.database)) as db:
+        with closing(sqlite3.connect(self.database.resolve().as_uri()+'?mode=ro',uri=True)) as db:
             row = db.execute("SELECT value FROM app_meta WHERE key='catalog_version'").fetchone()
         return _version(row[0]) if row else None
 
@@ -76,18 +77,30 @@ class CatalogUpdateManager:
             self._phase = 'checking'
             self._message = 'Проверяем обновления каталога…'
             self._update = None
+            self._can_resume = False
         try:
             current = self._read_current()
             update = fetch_catalog_update(current)
-        except Exception:
+            minimum = getattr(update,'min_app_version',None)
+            if minimum is not None and tuple(map(int,self.app_version.split('.')))<tuple(map(int,minimum.split('.'))):
+                raise CatalogCompatibilityUpdateError(minimum)
+            received = 0
+            if update:
+                partial = checked(self.root,f'CatalogDownloads/{update.sha256[:16]}/{update.sha256}.part')
+                if partial.is_file(): received = min(partial.stat().st_size,update.size)
+        except Exception as error:
             with self._lock:
                 self._phase = 'error'
-                self._message = 'Не удалось проверить каталог. Продолжайте вечер и попробуйте позже.'
+                self._message = (f'Для этого каталога нужен Tonight {error.minimum} или новее. Обновите приложение.'
+                                 if isinstance(error,CatalogCompatibilityUpdateError) else
+                                 'Не удалось проверить обновление. Попробуйте позже.')
         else:
             with self._lock:
                 self._current,self._update = current,update
                 self._phase = 'available' if update else 'current'
                 self._message = f'Доступен каталог {update.version}' if update else 'Новых пакетов каталога нет'
+                self._progress = received
+                self._can_resume = received>0
         finally:
             with self._lock:
                 self._last_check = time.monotonic()
@@ -105,7 +118,6 @@ class CatalogUpdateManager:
             self._update = replace(self._update)  # Fresh reservation identity, even on retry.
             self._phase = 'downloading'
             self._message = 'Скачиваем и проверяем каталог…'
-            self._progress = 0
             return self._update
 
     def run_reserved(self,update):
@@ -121,11 +133,12 @@ class CatalogUpdateManager:
             with self._lock:
                 self._progress = received
         try:
-            destination = checked(self.root,'CatalogDownloads/'+uuid.uuid4().hex)
+            destination = checked(self.root,'CatalogDownloads/'+update.sha256[:16])
             downloaded = download_catalog(update,destination,app_version=self.app_version,progress=progress)
             with self._lock:
                 self._phase = 'installing'
-                self._message = 'Добавляем фильмы и постеры. Личные данные сохраняются…'
+                self._message = 'Обновление скачано и проверено. Добавляем фильмы и постеры…'
+                self._can_resume = False
             install_catalog(self.root,downloaded,update,app_version=self.app_version,database=self.database,lease=lease)
             with self._lock:
                 self._current = update.version
@@ -140,14 +153,28 @@ class CatalogUpdateManager:
                     self._update = None
                     self._message = f'Для этого каталога нужен Tonight {error.minimum} или новее. Обновите приложение, затем снова проверьте каталог.'
                 elif isinstance(error,CatalogIntegrityUpdateError):
+                    # Only our private managed ZIP; direct downloader callers
+                    # continue to preserve arbitrary pre-existing destination files.
+                    try:
+                        target = checked(self.root,f'CatalogDownloads/{update.sha256[:16]}/{update.name}')
+                        if target.is_file() and target.stat().st_nlink==1: target.unlink()
+                    except (OSError,ValueError):
+                        pass
+                    self._can_resume = False
+                    self._progress = 0
                     self._message = 'Каталог не прошёл проверку и не установлен. Повторите загрузку; если ошибка повторится, попробуйте позже.'
+                elif isinstance(error,CatalogDownloadInterrupted):
+                    self._progress = error.received
+                    self._can_resume = error.received>0
+                    self._message = (f'Загрузка прервалась на {error.received/1_000_000:.1f} из {error.total/1_000_000:.1f} МБ. Можно продолжить'
+                                     if error.received else 'Не удалось скачать каталог. Попробуйте позже.')
                 else:
                     self._message = ('Восстановление каталога не завершено. Сохраните резервные копии и перезапустите Tonight.'
                                      if self._phase=='recovery_error' else
                                      'Каталог не обновлён. Проверьте подключение и обновление Tonight, затем повторите.')
         finally:
             try:
-                if downloaded is not None:
+                if downloaded is not None and self._phase=='done':
                     path = checked(self.root,downloaded.relative_to(self.root))
                     path.unlink(missing_ok=True)
             except (OSError,ValueError):

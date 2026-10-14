@@ -2,12 +2,66 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import dataclass
+import json
+import re
 
 import httpx
 
 from backend.auto_update import AvailableUpdate, DIGEST, DOWNLOAD_PREFIX, HEADERS, UpdateError, _client
-from backend.catalog_package import CatalogPackageError, _version
+from backend.catalog_package import CatalogPackageError, _version, _date, _unique_object
 from backend.release import MAX_RELEASE_BYTES
+
+MANIFEST_URL = 'https://raw.githubusercontent.com/vewi001/tonight/main/catalog/latest.json'
+MAX_MANIFEST_BYTES = 16 * 1024
+
+
+@dataclass(frozen=True)
+class CatalogOffer(AvailableUpdate):
+    min_app_version: str
+    published_at: str
+
+
+def select_catalog_manifest(payload, current_catalog_version):
+    fields = {'format_version','catalog_version','min_app_version','archive_url','size_bytes','sha256','published_at'}
+    try:
+        if not isinstance(payload,dict) or set(payload)!=fields or type(payload['format_version']) is not int or payload['format_version']!=1:
+            raise ValueError
+        version = _version(payload['catalog_version'])
+        minimum = _version(payload['min_app_version'])
+        published = _date(payload['published_at'])
+        if len(published)>40: raise ValueError
+        size,sha = payload['size_bytes'],payload['sha256']
+        name = f'Tonight-catalog-{version}.zip'
+        url = f'{DOWNLOAD_PREFIX}catalog-v{version}/{name}'
+        if (payload['archive_url']!=url or type(size) is not int or not 0<size<=MAX_RELEASE_BYTES
+                or not isinstance(sha,str) or not re.fullmatch('[a-f0-9]{64}',sha)):
+            raise ValueError
+        if current_catalog_version is not None and _numbers(version)<=_numbers(current_catalog_version):
+            return None
+        return CatalogOffer(version,name,size,sha,url,minimum,published)
+    except (ValueError,TypeError,KeyError):
+        raise UpdateError('Не удалось проверить обновление. Попробуйте позже.') from None
+
+
+def fetch_catalog_update(current_catalog_version: str | None, *, client: httpx.Client | None = None):
+    """Manifest first. Only absent index (404) permits legacy API fallback."""
+    try:
+        with nullcontext(client) if client is not None else _client() as session:
+            with session.stream('GET',MANIFEST_URL,headers={'User-Agent':'Tonight-updater','Accept-Encoding':'identity'},
+                                follow_redirects=False) as response:
+                if response.status_code!=404:
+                    if response.status_code!=200:
+                        raise UpdateError('Не удалось проверить обновление. Попробуйте позже.')
+                    body = bytearray()
+                    for chunk in response.iter_bytes(1024):
+                        body.extend(chunk)
+                        if len(body)>MAX_MANIFEST_BYTES:
+                            raise UpdateError('Не удалось проверить обновление. Попробуйте позже.')
+                    return select_catalog_manifest(json.loads(body,object_pairs_hook=_unique_object),current_catalog_version)
+            return fetch_catalog_releases(current_catalog_version,client=session)
+    except (httpx.HTTPError,ValueError):
+        raise UpdateError('Не удалось проверить обновление. Попробуйте позже.') from None
 
 
 def _numbers(version: str) -> tuple[int,...]:
@@ -69,7 +123,7 @@ def select_catalog_update(releases: list, current_catalog_version: str | None) -
     return AvailableUpdate(version,name,size,digest[1].lower(),expected_url)
 
 
-def fetch_catalog_update(current_catalog_version: str | None, *, client: httpx.Client | None = None) -> AvailableUpdate | None:
+def fetch_catalog_releases(current_catalog_version: str | None, *, client: httpx.Client | None = None) -> AvailableUpdate | None:
     """Public paginated list; bounded exhaustion is an error, not current.
 
     Production uses trust_env=False, no authorization or TMDB token. Future

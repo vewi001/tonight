@@ -81,7 +81,10 @@ def test_failed_catalog_download_never_leaves_installable_file(tmp_path,failure)
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(UpdateError):
             download_catalog(selected,destination,app_version='1.6.5' if failure=='compatibility' else '1.6.6',client=client)
-    assert not list(destination.iterdir())
+    if failure=='http':
+        assert not list(destination.glob('*.zip'))
+    else:
+        assert not list(destination.iterdir())
 
 
 def test_existing_output_is_preserved_and_invalid_source_never_requested(tmp_path):

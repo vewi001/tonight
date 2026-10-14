@@ -426,11 +426,11 @@ function catalogPanel() {
   const percent = update.total_bytes ? Math.min(100,Math.floor((update.download_bytes || 0)/update.total_bytes*100)) : 0;
   return `<section class="panel"><h2>Ваш локальный каталог</h2>${rows}<p class="hint">Доступность видео не проверена: ссылка на YouTube может перестать работать. Считаем постеры, сохранённые для карточек, без запасных обложек.</p></section>
     <section class="panel"><h2>Обновление каталога</h2><p>Новые фильмы и недостающие постеры — без TMDB-токена. История, оценки, личные правки и настройки сохранятся. Tonight не перезапустится.</p>
-    <p role="status">${esc(state.catalogError || update.message || 'Проверьте, появился ли новый пакет каталога')}${update.phase === 'downloading' ? ` · ${percent}%` : ''}</p>
+    <p role="status">${esc(state.catalogError || update.message || 'Проверьте, появился ли новый пакет каталога')}${update.phase === 'downloading' ? ` · ${((update.download_bytes || 0)/1000000).toFixed(1)} из ${((update.total_bytes || 0)/1000000).toFixed(1)} МБ · ${percent}%` : ''}</p>
     ${update.phase === 'downloading' ? `<progress aria-label="Загрузка каталога" max="100" value="${percent}"></progress>` : ''}
-    ${update.available_version ? `<p class="hint">Каталог ${esc(update.available_version)} · ${Math.ceil((update.total_bytes || 0)/1024/1024)} МБ. Совместимость проверим до установки.</p>` : ''}
+    ${update.available_version ? `<p class="hint">Каталог ${esc(update.available_version)} · ${Math.ceil((update.total_bytes || 0)/1000000)} МБ. Совместимость проверим до установки.</p>` : ''}
     <div class="footer-actions"><button class="button secondary" data-catalog-action="check" ${busy || recovery || appBusy ? 'disabled' : ''}>Проверить обновление каталога</button>
-    ${update.available_version && !recovery ? `<button class="button" data-catalog-action="install" ${busy || appBusy ? 'disabled' : ''}>Обновить каталог</button>` : ''}
+    ${update.available_version && !recovery ? `<button class="button" data-catalog-action="install" ${busy || appBusy ? 'disabled' : ''}>${update.can_resume ? 'Продолжить загрузку' : 'Обновить каталог'}</button>` : ''}
     ${recovery ? `<button class="button" data-catalog-action="recover" ${appBusy ? 'disabled' : ''}>Повторить восстановление</button>` : ''}</div></section>`;
 }
 

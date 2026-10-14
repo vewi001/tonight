@@ -11,7 +11,7 @@ import zipfile
 from backend.auto_update import AvailableUpdate
 from backend.backups import create_backup
 from backend.catalog_database import merge_catalog_movies
-from backend.catalog_discovery import select_catalog_update
+from backend.catalog_discovery import select_catalog_update, select_catalog_manifest
 from backend.catalog_media import sanitize_catalog_image
 from backend.catalog_package import EXTENSIONS, IDENTIFIER, MAX_RELEASE_BYTES, _version, read_catalog_package
 from backend.catalog_recovery import (CatalogInstallError, CatalogRecoveryError, checked, lease_context,
@@ -25,6 +25,10 @@ def _now():
 
 
 def _candidate(update):
+    if getattr(update,'min_app_version',None) is not None:
+        return select_catalog_manifest(dict(format_version=1,catalog_version=update.version,
+            min_app_version=update.min_app_version,published_at=update.published_at,
+            archive_url=update.url,size_bytes=update.size,sha256=update.sha256),None)
     return select_catalog_update([{'tag_name':'catalog-v'+update.version,'draft':False,'prerelease':False,
                                   'assets':[{'name':update.name,'size':update.size,'digest':'sha256:'+update.sha256,
                                              'browser_download_url':update.url}]}],None)
@@ -91,7 +95,8 @@ def _install_locked(root,database,updates,archive,update,app_version,checkpoint)
         private = checked(root,f'CatalogUpdates/{job_id}/package.zip')
         _snapshot(archive,private,update)
         package = read_catalog_package(private,app_version=app_version)
-        if package.version!=update.version:
+        if (package.version!=update.version or (getattr(update,'min_app_version',None) is not None
+                                               and package.min_app_version!=update.min_app_version)):
             raise CatalogInstallError('Версия каталога не совпадает с выбранным релизом.')
         prepared,total = [],0
         with zipfile.ZipFile(private) as bundle:

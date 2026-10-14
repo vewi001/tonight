@@ -4,7 +4,7 @@ import pytest
 import httpx
 
 from backend.auto_update import UpdateError
-from backend.catalog_discovery import fetch_catalog_update, select_catalog_update
+from backend.catalog_discovery import fetch_catalog_releases as fetch_catalog_update, select_catalog_update
 
 
 def release(version='1.0.0'):
