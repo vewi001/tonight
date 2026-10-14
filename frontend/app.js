@@ -8,7 +8,7 @@ const state = {
   setup: null,
   catalog: null, catalogTimer: null, catalogError: '', catalogRequest: 0,
   invite: null,
-  update: null, updateTimer: null, updateDismissed: sessionStorage.getItem('tonight:update-dismissed') || '', updateInstallingFrom: null,
+  update: null, updateTimer: null, updateDismissed: '', updateInstallingFrom: null,
   view: 'loading',
   searchDraft: null, navigationRequest: 0,
   presence: { lera: false, nikita: false },
@@ -117,10 +117,11 @@ function shell(content, { narrow = false, nav = true } = {}) {
       <button class="icon-button" data-view="watchlist">♡ <span class="nav-label">На потом</span></button>
       <button class="icon-button" data-view="taste">♡ <span class="nav-label">Наш вкус</span></button><button class="icon-button" data-view="search">⌕ <span class="nav-label">Найти</span></button>${identity}
     </nav></header>` : ''}
-    <div data-update-banner>${['diagnostics','catalog'].includes(state.view) ? '' : updateControls()}</div>
-    <main id="main" class="page ${narrow ? 'narrow' : ''}">${content}${['diagnostics','catalog'].includes(state.view) ? `<div data-update-panel>${updateControls(true)}</div>` : ''}</main>
+    <div data-update-banner>${updateDialog() || ['diagnostics','catalog'].includes(state.view) ? '' : updateControls()}</div>
+    <main id="main" class="page ${narrow ? 'narrow' : ''}">${content}${['diagnostics','catalog'].includes(state.view) ? `<div data-update-panel>${updateDialog() ? '' : updateControls(true)}</div>` : ''}</main>
     ${credits}
     <div data-connection-status role="status">${connectionNotice()}</div>
+    <div data-update-dialog>${updateDialog()}</div>
   </div>`;
 }
 
@@ -1117,20 +1118,46 @@ function updateControls(manual = false) {
 }
 
 function bindUpdateButtons() {
-  root.querySelectorAll('[data-update-action="check"]').forEach(button => button.addEventListener('click', checkUpdates));
-  root.querySelectorAll('[data-update-action="install"]').forEach(button => button.addEventListener('click', installUpdate));
-  root.querySelectorAll('[data-update-action="dismiss"]').forEach(button => button.addEventListener('click', () => {
-    state.updateDismissed = state.update?.available_version || '';
-    sessionStorage.setItem('tonight:update-dismissed', state.updateDismissed);
-    updateNotice();
-  }));
+  root.querySelectorAll('[data-update-action]').forEach(button => {
+    if (button.dataset.updateBound) return;
+    button.dataset.updateBound = '1';
+    if (button.dataset.updateAction === 'check') button.addEventListener('click', checkUpdates);
+    if (button.dataset.updateAction === 'install') button.addEventListener('click', installUpdate);
+    if (button.dataset.updateAction === 'dismiss') button.addEventListener('click', () => {
+      state.updateDismissed = state.update?.available_version || '';
+      updateNotice();
+    });
+  });
+  const dialog = root.querySelector('[data-update-dialog] dialog');
+  if (dialog && !dialog.open) {
+    dialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      if (['downloading','ready','installing'].includes(state.update?.phase)) return;
+      state.updateDismissed = state.update?.available_version || '';
+      updateNotice();
+    });
+    dialog.showModal();
+  }
+}
+
+function updateDialog() {
+  if (isRemoteClient() || !state.update?.available_version ||
+      (state.updateDismissed === state.update.available_version &&
+       !['downloading','ready','installing'].includes(state.update.phase))) return '';
+  return `<dialog class="startup-update-dialog" aria-label="Доступно обновление Tonight">${updateControls()}</dialog>`;
 }
 
 function updateNotice() {
+  const dialogHtml = updateDialog();
   const banner = root.querySelector('[data-update-banner]');
-  if (banner) banner.innerHTML = ['diagnostics','catalog'].includes(state.view) ? '' : updateControls();
+  if (banner) banner.innerHTML = dialogHtml || ['diagnostics','catalog'].includes(state.view) ? '' : updateControls();
   const panel = root.querySelector('[data-update-panel]');
-  if (panel) panel.innerHTML = updateControls(true);
+  if (panel) panel.innerHTML = dialogHtml ? '' : updateControls(true);
+  const dialogHost = root.querySelector('[data-update-dialog]');
+  if (dialogHost && dialogHost.dataset.updateMarkup !== dialogHtml) {
+    dialogHost.innerHTML = dialogHtml;
+    dialogHost.dataset.updateMarkup = dialogHtml;
+  }
   bindUpdateButtons();
 }
 

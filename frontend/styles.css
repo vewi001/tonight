@@ -207,6 +207,9 @@ h3 { font-size:1.2rem; }
 .feedback { border:1px solid var(--line); background:rgba(255,255,255,.05); padding:.9rem 1rem; border-radius:16px; cursor:pointer; }
 .modal-backdrop { position:fixed; z-index:80; inset:0; background:rgba(2,1,4,.76); backdrop-filter:blur(14px); display:grid; place-items:center; padding:1rem; }
 .modal { width:min(740px,100%); max-height:90vh; overflow:auto; background:#17131d; border:1px solid var(--line); border-radius:28px; padding:1.4rem; box-shadow:var(--shadow); }
+.startup-update-dialog { width:min(560px,calc(100% - 2rem)); max-height:calc(100dvh - 2rem); overflow:auto; padding:0; border:1px solid var(--line); border-radius:24px; background:var(--bg); color:var(--text); font:inherit; box-shadow:var(--shadow); }
+.startup-update-dialog::backdrop { background:rgba(2,1,4,.76); backdrop-filter:blur(10px); }
+.startup-update-dialog .update-notice { margin:0; border:0; }
 .modal-layout { display:grid; grid-template-columns:180px 1fr; gap:1.4rem; }
 .modal img { width:100%; border-radius:18px; }
 .toast { position:fixed; z-index:100; left:50%; bottom:1.5rem; transform:translate(-50%,120px); opacity:0; background:#fff5ed; color:#23161a; padding:.85rem 1.1rem; border-radius:999px; font-weight:750; transition:.3s; box-shadow:var(--shadow); }

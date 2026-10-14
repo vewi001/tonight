@@ -63,8 +63,7 @@ def test_user_facing_sources_do_not_contain_personal_profile_names():
         ROOT / "backend" / "recommendation" / "engine.py",
         ROOT / "launcher.py",
         ROOT / "README.md",
-        ROOT / "PRODUCT_ROADMAP.md",
-        *ROOT.glob("FEATURE_SPEC*.md"),
+        ROOT / "ROADMAP.md",
     ]
     matches: list[str] = []
     for path in files:

@@ -19,14 +19,18 @@ vm.runInContext(fs.readFileSync('frontend/app.js','utf8').replace(/\ninit\(\);\s
 vm.runInContext(`state.update={phase:'available',available_version:'1.6.5',total_bytes:1048576,install_supported:true,message:'Доступно обновление 1.6.5'}`,sandbox);
 let html = vm.runInContext('updateControls()', sandbox);
 assert(html.includes('Скачать и обновить') && html.includes('Не сейчас'));
+assert(vm.runInContext('updateDialog()',sandbox).includes('<dialog'));
+assert(vm.runInContext('updateDialog()',sandbox).includes('Доступно обновление Tonight'));
 vm.runInContext(`state.updateDismissed='1.6.5'`,sandbox);
 assert.equal(vm.runInContext('updateControls()',sandbox),'');
+assert.equal(vm.runInContext('updateDialog()',sandbox),'');
 assert(vm.runInContext('updateControls(true)',sandbox).includes('Проверить обновления'));
 vm.runInContext(`state.update.phase='downloading'; state.update.download_bytes=524288`,sandbox);
 html=vm.runInContext('updateControls()',sandbox);
 assert(html.includes('50%') && html.includes('Загрузка обновления'));
 sandbox.location.hostname='192.168.1.10';
 assert.equal(vm.runInContext('updateControls(true)',sandbox),'');
+assert.equal(vm.runInContext('updateDialog()',sandbox),'');
 sandbox.location.hostname='localhost';
 vm.runInContext(`api=async()=>({phase:'downloading',current_version:'1.6.4'}); updateNotice=()=>{}; refreshUpdateStatus=()=>{}; installUpdate()`,sandbox)
   .then(()=>assert.equal(vm.runInContext('state.updateInstallingFrom',sandbox),'1.6.4'))

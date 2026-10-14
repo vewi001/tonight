@@ -22,6 +22,18 @@ def test_main_computer_can_check_public_update_state(manager):
         assert client.get("/api/updates").json()["install_supported"] is True
 
 
+def test_startup_checks_without_a_manual_request(manager):
+    import time
+    with TestClient(main.app) as client:
+        deadline=time.monotonic()+3
+        while True:
+            status=client.get('/api/updates').json()
+            if status['phase']=='available': break
+            assert time.monotonic()<deadline,'Startup check did not run'
+            time.sleep(.01)
+        assert status['available_version']=='1.6.5'
+
+
 def test_phone_cannot_check_or_install_even_with_evening_code(manager):
     with TestClient(main.app, client=("192.168.1.20", 1234)) as client:
         assert client.get("/api/updates").status_code == 403
