@@ -7,7 +7,7 @@ import zipfile
 import httpx
 import pytest
 
-from backend.auto_update import UpdateError, download_update, fetch_latest_update, select_update
+from backend.auto_update import APP_MANIFEST_URL, LATEST_URL, UpdateError, download_update, fetch_latest_update, select_update, select_app_manifest
 
 
 def payload(content=b"zip", version="1.6.5"):
@@ -57,11 +57,47 @@ def test_check_uses_only_public_request_without_credentials():
     seen = []
     def handler(request):
         seen.append(request)
+        if str(request.url)==APP_MANIFEST_URL: return httpx.Response(404)
         return httpx.Response(200, json=payload())
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         assert fetch_latest_update("1.6.4", client=client).version == "1.6.5"
-    assert str(seen[0].url) == "https://api.github.com/repos/vewi001/tonight/releases/latest"
-    assert "authorization" not in seen[0].headers and "cookie" not in seen[0].headers
+    assert [str(r.url) for r in seen]==[APP_MANIFEST_URL,LATEST_URL]
+    assert all('authorization' not in r.headers and 'cookie' not in r.headers for r in seen)
+
+
+def app_manifest():
+    asset=payload()['assets'][0]
+    return {'format_version':1,'app_version':'1.6.5','archive_url':asset['browser_download_url'],
+            'size_bytes':asset['size'],'sha256':asset['digest'][7:]}
+
+
+def test_app_manifest_avoids_api_limits_and_sends_no_credentials():
+    seen=[]
+    def handler(request):
+        seen.append(request)
+        assert str(request.url)==APP_MANIFEST_URL
+        return httpx.Response(200,json=app_manifest())
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert fetch_latest_update('1.6.4',client=client).version=='1.6.5'
+        assert fetch_latest_update('1.6.5',client=client) is None
+    assert len(seen)==2 and all('authorization' not in r.headers for r in seen)
+
+
+@pytest.mark.parametrize('field,value',[('format_version',True),('format_version',2),('app_version','v1.6.5'),
+    ('archive_url','https://example.com/a.zip'),('sha256','bad'),('size_bytes',True),('size_bytes',0)])
+def test_app_manifest_rejects_untrusted_delivery_metadata_even_for_old_versions(field,value):
+    data=app_manifest(); data[field]=value
+    with pytest.raises(UpdateError): select_app_manifest(data,'2.0.0')
+
+
+@pytest.mark.parametrize('content',[b'{"format_version":1,"format_version":1}',b'x'*17000,b'not json'])
+def test_malformed_app_manifest_never_falls_back_to_api(content):
+    seen=[]
+    def handler(request):
+        seen.append(str(request.url)); return httpx.Response(200,content=content)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(UpdateError): fetch_latest_update('1.6.4',client=client)
+    assert seen==[APP_MANIFEST_URL]
 
 
 @pytest.mark.parametrize("status", [403, 429, 503])

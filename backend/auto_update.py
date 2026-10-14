@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import threading
 import time
@@ -18,6 +19,7 @@ from backend.release import MAX_RELEASE_BYTES, ReleaseError, read_release
 from backend.update_guard import acquire_update_lease, UpdateGuardError
 
 LATEST_URL = "https://api.github.com/repos/vewi001/tonight/releases/latest"
+APP_MANIFEST_URL = "https://raw.githubusercontent.com/vewi001/tonight/main/app/latest.json"
 DOWNLOAD_PREFIX = "https://github.com/vewi001/tonight/releases/download/"
 VERSION = re.compile(r"(?:v)?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z")
 DIGEST = re.compile(r"sha256:([a-fA-F0-9]{64})\Z")
@@ -79,9 +81,45 @@ def _client():
     return httpx.Client(timeout=httpx.Timeout(30, connect=10), trust_env=False, follow_redirects=False)
 
 
+def select_app_manifest(payload: dict, current_version: str) -> AvailableUpdate | None:
+    """Strict delivery metadata, with the same archive checks as Releases API."""
+    fields={'format_version','app_version','archive_url','size_bytes','sha256'}
+    if not isinstance(payload,dict) or set(payload)!=fields or type(payload.get('format_version')) is not int or payload['format_version']!=1:
+        raise UpdateError('Описание обновления имеет неподдерживаемый формат.')
+    version=payload['app_version']
+    if not isinstance(version,str) or not VERSION.fullmatch(version) or version.startswith('v'):
+        raise UpdateError('Не удалось определить версию обновления.')
+    digest=payload['sha256']
+    if not isinstance(digest,str) or not re.fullmatch('[a-f0-9]{64}',digest):
+        raise UpdateError('В описании обновления нет контрольной суммы.')
+    # Validate unsafe metadata even when its version is not newer.
+    metadata={'tag_name':version,'draft':False,'prerelease':False,'assets':[{
+        'name':f'Tonight-update-{version}.zip','size':payload['size_bytes'],
+        'digest':'sha256:'+digest,'browser_download_url':payload['archive_url']}]}
+    validated=select_update(metadata,'0.0.0')
+    if validated is None: raise UpdateError('Не удалось проверить описание обновления.')
+    return select_update(metadata,current_version)
+
+
+def _unique_manifest_object(pairs):
+    result={}
+    for key,value in pairs:
+        if key in result: raise UpdateError('В описании обновления повторяются поля.')
+        result[key]=value
+    return result
+
+
 def fetch_latest_update(current_version: str, *, client: httpx.Client | None = None) -> AvailableUpdate | None:
     try:
         with nullcontext(client) if client is not None else _client() as session:
+            with session.stream('GET',APP_MANIFEST_URL,headers={'Accept':'application/json','User-Agent':'Tonight-updater'}) as manifest:
+                if manifest.status_code!=404:
+                    manifest.raise_for_status()
+                    data=bytearray()
+                    for chunk in manifest.iter_bytes():
+                        data.extend(chunk)
+                        if len(data)>16*1024: raise UpdateError('Описание обновления слишком большое.')
+                    return select_app_manifest(json.loads(data,object_pairs_hook=_unique_manifest_object),current_version)
             response = session.get(LATEST_URL, headers=HEADERS)
             if response.status_code == 404:
                 return None
