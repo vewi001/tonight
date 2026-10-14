@@ -64,6 +64,11 @@ CREATE TABLE IF NOT EXISTS movies (
     original_title TEXT,
     year INTEGER NOT NULL,
     release_date TEXT,
+    russian_title TEXT,
+    theatrical_release_date TEXT,
+    theatrical_release_type INTEGER,
+    theatrical_release_country TEXT,
+    release_status TEXT,
     genres TEXT NOT NULL,
     overview TEXT,
     runtime INTEGER,
@@ -240,6 +245,11 @@ def initialize(path: Path | None = None) -> None:
         for row in missing_codes:
             db.execute("UPDATE sessions SET access_code=? WHERE id=?", (generate_access_code(), row["id"]))
         migrations = {
+            "russian_title": "TEXT",
+            "theatrical_release_date": "TEXT",
+            "theatrical_release_type": "INTEGER",
+            "theatrical_release_country": "TEXT",
+            "release_status": "TEXT",
             "release_date": "TEXT",
             "tmdb_id": "INTEGER",
             "trailer_key": "TEXT",

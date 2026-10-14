@@ -15,7 +15,8 @@ const state = {
   connected: true,
   prefs: { moods: [], energy: null, max_runtime: 120, min_year: 2000, disliked_genres: [] },
   deck: [], total: 20, ws: null, reconnectTimer: null, reconnectAttempts: 0, wasDisconnected: false,
-  historyId: null, modal: null, deferMovieId: null, privacyDeleteOpen: false, waitTimer: null, recovering: false, restarting: false, waitError: '', backups: [], backupImportFile: null, searchQuery:'', searchResults:[], weeklyPicks:[], franchises:[], diagnostics:null, usageSummary:null, watchlistQuery:'', watchlistGenre:'',
+  expandedDescriptions: new Set(),
+  historyId: null, feedbackMovie:null, modal: null, deferMovieId: null, privacyDeleteOpen: false, waitTimer: null, recovering: false, restarting: false, waitError: '', backups: [], backupImportFile: null, searchQuery:'', searchResults:[], weeklyPicks:[], franchises:[], diagnostics:null, usageSummary:null, watchlistHiddenCount:0, watchlistQuery:'', watchlistGenre:'',
 };
 
 const moods = [
@@ -161,7 +162,7 @@ function render() {
   const views = {
     setup: renderSetup, home: renderHome, vibe: renderVibe, filters: renderFilters,
     swipe: renderSwipe, waiting: renderWaiting, results: renderResults, quick: renderQuick,
-    selected: renderSelected, feedback: renderFeedback, eveningFeedback: renderEveningFeedback, history: renderHistory, weekly: renderWeekly, franchises: renderFranchises, diagnostics: renderDiagnostics,
+    selected: renderSelected, watching:renderWatching, feedback: renderFeedback, eveningFeedback: renderEveningFeedback, history: renderHistory, weekly: renderWeekly, franchises: renderFranchises, diagnostics: renderDiagnostics,
     taste: renderTaste, watchlist: renderWatchlist, search: renderSearch, error: renderError, catalog: renderCatalog,
   };
   root.innerHTML = (views[state.view] || renderHome)();
@@ -220,6 +221,7 @@ function renderHome() {
   let cta = 'Какой сегодня вайб?';
   if (s?.status === 'completed') { title = 'Ещё один фильм?'; cta = 'Начать новый вечер 🍿'; }
   else if (s?.status === 'recommended') { title = 'Кажется, мэтч уже найден'; cta = 'Показать результат'; }
+  else if (s?.status === 'watching') { title = 'Приятного просмотра!'; cta = 'Вернуться к просмотру'; }
   else if (s?.status === 'selected') { title = 'Фильм на сегодня выбран'; cta = 'Показать выбор'; }
   else if (s?.participants?.[state.user]?.ready) { title = `Готово, ${names[state.user]}!`; cta = 'Вернуться к ожиданию'; }
   else if (s?.participants?.[state.user]?.energy) { title = 'Продолжим с того же места?'; cta = 'Продолжить выбор'; }
@@ -266,10 +268,11 @@ function renderSwipe() {
   reacting = false;
   const movie = state.deck[0];
   const progress = state.total - state.deck.length;
-  if (!movie) return renderWaiting();
+  if (!movie) return renderNoAvailableMovies();
   return shell(`<section><div class="progress-line"><div class="track"><i style="width:${(progress/state.total)*100}%"></i></div><strong>${progress + 1} / ${state.total}</strong></div>
     <div class="swipe-stage"><article class="swipe-card" id="swipe-card" tabindex="0" aria-label="${esc(movie.title)}">
       <div class="poster-wrap"><img src="${movie.poster_url}" alt="Постер фильма ${esc(movie.title)}" draggable="false"><div class="poster-shade"></div><div class="poster-copy"><h2>${esc(movie.title)}</h2><div class="meta"><span>${movie.year}</span><span>•</span><span>${movie.genres.join(' · ')}</span><span>•</span><span>${movie.runtime} мин</span></div><p class="card-overview">${esc(movie.overview || 'Описание пока не добавлено')}</p></div></div>
+      ${movie.overview ? descriptionDisclosure(movie.overview, movie.id, 'card-description') : ''}
       <div class="reaction-row">${reactionMap.map(([id,e,label]) => `<button class="reaction" data-reaction="${id}" title="${label}">${e}<span>${label}</span></button>`).join('')}</div>
       <p class="hint">← не хочу · ↑ обожаю · → нравится · ↓ норм · ? не смотрел(а)</p>
     </article></div></section>`);
@@ -285,16 +288,24 @@ function renderWaiting() {
     <div class="status-cards"><div class="status-card">${emojis[state.user]} ${names[state.user]}<br><strong class="ok">готов 🍿</strong></div><div class="status-card">${emojis[other]} ${names[other]}<br><strong>${op.ready?'готов 🍿':`${op.progress || 0} / ${state.total}`}</strong></div></div>${recovery}</div></section>`);
 }
 
-function movieDescription(description) {
+function descriptionDisclosure(description, movieId, className = 'movie-description') {
+  return `<details class="${className}" aria-label="Полное описание" data-description-key="${esc(movieId || '')}" ${state.expandedDescriptions.has(String(movieId || '')) ? 'open' : ''}><summary><span class="description-expand">Раскрыть целиком</span><span class="description-collapse">Свернуть описание</span></summary><p class="description-full">${esc(description)}</p></details>`;
+}
+
+function renderNoAvailableMovies() {
+  return shell(`<section class="empty"><h2>Пока нет фильмов для выбора</h2><p>Нужно подтверждённое русское название и состоявшийся прокат. Записи каталога и ваша история сохранены.</p><p class="hint">Проверьте обновление каталога на основном компьютере или измените ограничения вечера.</p><button class="button secondary" data-view="home">На главный экран</button></section>`);
+}
+
+function movieDescription(description, movieId = '') {
   const full = String(description || 'Описание пока не добавлено');
   if (full.length <= 220) return `<p class="lede movie-summary">${esc(full)}</p>`;
   const excerpt = full.slice(0, 200).replace(/\s+\S*$/, '') + '…';
-  return `<p class="lede movie-summary">${esc(excerpt)}</p><details class="movie-description"><summary>Полное описание</summary><p>${esc(full)}</p></details>`;
+  return `<p class="lede movie-summary">${esc(excerpt)}</p>${descriptionDisclosure(full, movieId)}`;
 }
 
 function renderResults() {
   const list = state.session?.recommendations || [];
-  if (!list.length) return renderWaiting();
+  if (!list.length) return renderNoAvailableMovies();
   const main = list[0];
   const context = state.session?.recommendation_context || {};
   const reasons = Array.isArray(main.plain_reasons) && main.plain_reasons.length === 2
@@ -306,7 +317,7 @@ function renderResults() {
   const excluded = context.excluded_genres || [];
   const stopGenresRespected = main.stop_genres_respected !== false;
   const relaxedText = context.relaxed_constraints?.length ? `Чтобы выбор не оказался пустым, мы расширили: ${context.relaxed_constraints.join(' и ')}. Стоп-жанры остались исключены.` : '';
-  return shell(`<section><div class="result-hero"><img src="${main.backdrop_url}" alt=""><div class="result-content"><span class="match">${main.match}% мэтч</span><p class="eyebrow">Кажется, у нас мэтч 🍿</p><h1>${esc(main.title)}</h1><div class="meta"><span>${main.year}</span><span>•</span><span>${main.runtime} мин</span><span>•</span><span>${main.genres.join(' · ')}</span><span>★ ${main.rating}</span></div>${movieDescription(main.overview)}<div class="footer-actions" style="justify-content:flex-start">${trailerButton(main)}</div></div></div>
+  return shell(`<section><div class="result-hero"><img src="${main.backdrop_url}" alt=""><div class="result-content"><span class="match">${main.match}% мэтч</span><p class="eyebrow">Кажется, у нас мэтч 🍿</p><h1>${esc(main.title)}</h1><div class="meta"><span>${main.year}</span><span>•</span><span>${main.runtime} мин</span><span>•</span><span>${main.genres.join(' · ')}</span><span>★ ${main.rating}</span></div>${movieDescription(main.overview, main.id)}<div class="footer-actions" style="justify-content:flex-start">${trailerButton(main)}</div></div></div>
     <h2 class="section-title">Почему выбрали этот фильм</h2><ul class="reason-list">${reasons.map(reason => `<li class="reason">✓ ${esc(reason)}</li>`).join('')}</ul>
     <div class="${stopGenresRespected ? 'filter-proof' : 'constraint-warning'}"><strong>${stopGenresRespected ? 'Стоп-жанры учтены ✓' : 'Этот вариант не прошёл проверку стоп-жанров'}</strong><p>${stopGenresRespected ? (excluded.length ? `В фильме нет: ${esc(excluded.join(', '))}.` : 'Сегодня вы не выбирали стоп-жанры.') : 'Начните выбор заново — такой фильм не должен попадать в результат.'}</p></div>
     ${relaxedText ? `<div class="constraint-warning"><strong>Немного расширили поиск</strong><p>${esc(relaxedText)}</p></div>` : ''}
@@ -320,18 +331,24 @@ function renderSelected() {
   const movie = state.session?.selected;
   if (!movie) return renderResults();
   const traits = similarityTraits(movie);
-  return shell(`<section class="selected-layout"><img class="selected-poster" src="${movie.poster_url}" alt="Постер ${esc(movie.title)}"><div><p class="eyebrow">Финальное решение</p><h1>${esc(movie.title)}</h1><div class="meta"><span>${movie.year}</span><span>•</span><span>${movie.runtime} мин</span><span>•</span><span>${movie.genres.join(' · ')}</span></div>${movieDescription(movie.overview)}<p class="hint">Будем смотреть? Если да — после просмотра оба поставят свою оценку, и Tonight учтёт её в следующих рекомендациях.</p><div class="footer-actions" style="justify-content:flex-start">${trailerButton(movie)}<button class="button large" data-action="watched">✅ Будем смотреть</button><button class="button secondary large" data-action="decline">✋ Не смотрим</button><button class="button ghost" data-action="choose-another">🎲 Другой вариант</button></div>
+  return shell(`<section class="selected-layout"><img class="selected-poster" src="${movie.poster_url}" alt="Постер ${esc(movie.title)}"><div><p class="eyebrow">Финальное решение</p><h1>${esc(movie.title)}</h1><div class="meta"><span>${movie.year}</span><span>•</span><span>${movie.runtime} мин</span><span>•</span><span>${movie.genres.join(' · ')}</span></div>${movieDescription(movie.overview, movie.id)}<p class="hint">Будем смотреть? Если да — после просмотра оба поставят свою оценку, и Tonight учтёт её в следующих рекомендациях.</p><div class="footer-actions" style="justify-content:flex-start">${trailerButton(movie)}<button class="button large" data-action="start-watching">✅ Будем смотреть</button><button class="button secondary large" data-action="decline">✋ Не смотрим</button><button class="button ghost" data-action="choose-another">🎲 Другой вариант</button></div>
     <details class="avoid-box"><summary>🚫 Не предлагать похожее</summary><p>Это сильнее обычного «не смотрим». Ослабим в будущих рекомендациях:</p><ul><li><strong>Сочетание жанров:</strong> ${esc(traits.genres.join(', ') || 'как у этого фильма')}</li><li><strong>Настроение:</strong> ${esc(traits.moods.join(', ') || 'похожее')}</li>${traits.franchise ? '<li><strong>Франшизу:</strong> следующие части этой серии</li>' : ''}</ul><p class="hint">Целый жанр не будет заблокирован. Действие можно отменить в «Наш вкус».</p><button class="button secondary" data-action="confirm-avoid-similar">Подтвердить и выбрать другой</button></details>
     </div></section>`);
 }
 
-function renderFeedback() {
+function renderWatching() {
   const movie = state.session?.selected;
-  return shell(`<section class="waiting"><div><p class="eyebrow">Запомним на будущее</p><h2>Ну как вам?</h2><p class="lede" style="margin-inline:auto">${esc(movie?.title || 'Этот фильм')}</p><div class="feedback-row">${feedbackMap.map(([e,label,value]) => `<button class="feedback" data-feedback="${value}">${e} ${label}</button>`).join('')}</div><p class="hint">Оценку второго увидишь после своей</p></div></section>`, {narrow:true});
+  if (!movie) return renderHome();
+  return shell(`<section class="waiting"><div><p class="eyebrow">Смотрим 🍿</p><h2>${esc(movie.title)}</h2><p class="lede">Приятного просмотра! Оценку сейчас ставить не нужно. Вернитесь сюда после фильма или откройте историю.</p><div class="footer-actions"><button class="button" data-action="finish-and-rate">Просмотр окончен — оценить</button><button class="button secondary" data-action="finish-without-rating">Просмотр окончен, оценю позже</button><button class="button ghost" data-view="history">Открыть историю</button></div></div></section>`);
+}
+
+function renderFeedback() {
+  const movie = state.feedbackMovie || state.session?.selected;
+  return shell(`<section class="waiting"><div><p class="eyebrow">Запомним на будущее</p><h2>Ну как вам?</h2><p class="lede" style="margin-inline:auto">${esc(movie?.title || 'Этот фильм')}</p><div class="feedback-row">${feedbackMap.map(([e,label,value]) => `<button class="feedback" data-feedback="${value}">${e} ${label}</button>`).join('')}</div><p class="hint">Оценить можно в любой момент из истории</p><button class="button ghost" data-action="leave-feedback">Оценить позже</button></div></section>`, {narrow:true});
 }
 
 function renderEveningFeedback() {
-  const movie = state.session?.selected;
+  const movie = state.feedbackMovie || state.session?.selected;
   return shell(`<section class="waiting"><div><p class="eyebrow">Ещё один вопрос</p><h2>Для совместного вечера подошло?</h2><p class="lede" style="margin-inline:auto">${esc(movie?.title || 'Этот фильм')}</p><div class="footer-actions"><button class="button" data-evening-fit="true">Да, было хорошо вместе</button><button class="button secondary" data-evening-fit="false">Не очень</button></div><button class="button ghost" data-action="skip-evening-feedback">Пропустить</button></div></section>`, {narrow:true});
 }
 
@@ -346,7 +363,8 @@ function renderHistory() {
     return acc;
   }, {});
   return shell(`<section><div class="screen-head"><p class="eyebrow">Наша история 🍿</p><h2>Фильмы, которые уже стали нашими вечерами</h2></div>
-    ${items.length ? Object.entries(groups).map(([month, movies]) => `<section><h3 class="section-title">${month}</h3><div class="history-grid">${movies.map(item => `<article class="history-card"><img src="${item.movie.poster_url}" alt=""><h3>${esc(item.movie.title)}</h3><div class="ratings">${names.lera} ${faces[item.ratings.lera] || '—'} · ${names.nikita} ${faces[item.ratings.nikita] || '—'}</div></article>`).join('')}</div></section>`).join('') : '<div class="empty">Здесь появится ваш первый совместный фильм 🍿</div>'}
+    ${state.session?.status === 'watching' ? `<div class="status-card"><p>Сейчас смотрим: <strong>${esc(state.session.selected?.title || 'Выбранный фильм')}</strong></p><button class="button secondary" data-view="watching">Вернуться к просмотру</button></div>` : ''}
+    ${items.length ? Object.entries(groups).map(([month, movies]) => `<section><h3 class="section-title">${month}</h3><div class="history-grid">${movies.map(item => `<article class="history-card"><img src="${item.movie.poster_url}" alt=""><h3>${esc(item.movie.title)}</h3><div class="ratings">${names.lera} ${faces[item.ratings.lera] || '—'} · ${names.nikita} ${faces[item.ratings.nikita] || '—'}</div><button class="button secondary" data-action="rate-history" data-history-id="${item.history_id}">${item.ratings[state.user] == null ? 'Оценить просмотр' : 'Изменить свою оценку'}</button></article>`).join('')}</div></section>`).join('') : '<div class="empty">Здесь появится ваш первый совместный фильм 🍿</div>'}
   </section>`);
 }
 
@@ -357,8 +375,8 @@ function renderWeekly() {
 
 function renderFranchises() {
   const groups = state.franchises || [];
-  const card = group => `<section class="profile-actions"><h3>${esc(group.title)}</h3><p class="hint">Уже посмотрели вместе: ${group.watched_count} из ${group.parts.length}</p><div class="choice-stack">${group.parts.map(part => `<div class="taste-item"><span><strong>${part.franchise_order ? `${part.franchise_order}. ` : ''}${esc(part.title)}</strong><small>${part.watched ? 'Уже посмотрели вместе' : part.released === false ? 'Ещё не вышел в прокат' : part.available ? 'Можно выбрать следующим' : 'Сначала нужна предыдущая часть'}</small></span>${part.available && !part.watched ? `<button class="button ghost small" data-action="select-franchise" data-movie-id="${part.id}">Выбрать на сегодня</button>` : ''}</div>`).join('')}</div>${group.next_movie ? `<p class="hint">Следующая доступная часть: ${esc(group.next_movie.title)}. Это только подсказка — можно выбрать любой фильм.</p>` : '<p class="hint">Пока следующую часть не подсказываем: сначала должна выйти и стать доступной следующая часть серии.</p>'}</section>`;
-  return shell(`<section><div class="screen-head"><p class="eyebrow">Серии фильмов ≡</p><h2>Смотреть по порядку — если хочется</h2><p class="lede">Здесь отмечены только фильмы, которые вы посмотрели вместе в Tonight.</p><p class="hint">Это не обязательный маршрут: серия не ограничивает обычный выбор.</p></div>${groups.length ? groups.map(card).join('') : '<div class="empty"><h3>Серий пока нет</h3><p>Когда в локальном каталоге появятся части одной истории, порядок будет здесь.</p></div>'}</section>`);
+  const card = group => `<section class="profile-actions"><h3>${esc(group.title)}</h3><p class="hint">Просмотрено вместе: ${group.watched_count} из ${group.part_count ?? group.parts.length}</p><div class="choice-stack">${group.parts.map(part => `<div class="taste-item"><span><strong>${part.franchise_order ? `${part.franchise_order}. ` : ''}${esc(part.title)}</strong><small>${part.watched ? 'Просмотрено вместе' : part.available ? 'Ещё не смотрели вместе · Можно выбрать следующим' : 'Ещё не смотрели вместе · Сначала нужна предыдущая часть'}</small></span>${part.available && !part.watched ? `<button class="button ghost small" data-action="select-franchise" data-movie-id="${part.id}">Выбрать на сегодня</button>` : ''}</div>`).join('')}</div>${group.hidden_unverified_count ? `<p class="hint">Скрыто неподтверждённых частей: ${group.hidden_unverified_count}. Записи серии сохранены.</p>` : ''}${group.next_movie ? `<p class="hint">Следующая доступная часть: ${esc(group.next_movie.title)}. Это только подсказка — можно выбрать любой фильм.</p>` : '<p class="hint">Следующую часть пока не предлагаем: нужны подтверждённый прокат, русское название и просмотр предыдущих частей.</p>'}</section>`;
+  return shell(`<section><div class="screen-head"><p class="eyebrow">Серии фильмов ≡</p><h2>Смотреть по порядку — если хочется</h2><p class="lede">Здесь показан порядок частей серий. Отметка «Просмотрено вместе» означает подтверждённый просмотр в Tonight; остальные части вы ещё не смотрели вместе.</p><p class="hint">Это не обязательный маршрут: серия не ограничивает обычный выбор.</p></div>${groups.length ? groups.map(card).join('') : '<div class="empty"><h3>Серий пока нет</h3><p>Когда в локальном каталоге появятся части одной истории, порядок будет здесь.</p></div>'}</section>`);
 }
 
 function renderDiagnostics() {
@@ -381,7 +399,7 @@ function renderWatchlist() {
   });
   const filters = `<div class="search-form watchlist-filters"><input data-watchlist-search value="${esc(state.watchlistQuery)}" placeholder="Найти в списке" maxlength="100" aria-label="Найти фильм в списке на потом"><select data-watchlist-genre aria-label="Фильтр по жанру"><option value="">Все жанры</option>${genresInList.map(genre => `<option value="${esc(genre)}" ${genre === state.watchlistGenre ? 'selected' : ''}>${esc(genre)}</option>`).join('')}</select></div>`;
   const cards = visibleItems.length ? `<div class="history-grid">${visibleItems.map(movie => `<article class="history-card"><img src="${movie.poster_url}" alt=""><h3>${esc(movie.title)}</h3><p class="hint">${esc(movie.overview || 'Описание появится после обновления каталога')}</p>${movie.fits_tonight === true ? '<p class="hint">✓ Подходит под сегодняшний план</p>' : ''}${movie.franchise_warning ? `<p class="hint">⚠ ${esc(movie.franchise_warning)}</p>` : ''}${movie.saved_by ? `<p class="hint">Добавил(а): ${esc(names[movie.saved_by])}</p>` : ''}${movie.deferred_reason ? `<p class="hint">Отложили: ${esc(movie.deferred_reason)}</p>` : ''}<div class="footer-actions">${trailerButton(movie, 'button secondary')}<button class="button" data-action="watch-saved" data-movie-id="${movie.id}">✅ Будем смотреть</button><button class="button ghost" data-action="remove-later" data-movie-id="${movie.id}">Убрать</button></div></article>`).join('')}</div>` : `<div class="empty compact"><h3>Ничего не нашли</h3><p>Попробуйте другое слово или жанр.</p><button class="button ghost" data-action="reset-watchlist-filters">Сбросить фильтры</button></div>`;
-  return shell(`<section><div class="screen-head"><p class="eyebrow">Общий список ♡</p><h2>На потом</h2><p class="lede">Варианты, которые понравились, но не подошли именно сегодня.</p>${items.some(movie => movie.fits_tonight !== null) ? '<p class="hint">Сначала — то, что подходит под сегодняшний план. Остальные фильмы остаются в списке.</p>' : ''}</div>${items.length ? `${filters}${cards}` : '<div class="empty"><h3>Пока пусто</h3><p>Сохраняйте подходящие фильмы из результатов, чтобы вернуться к ним в другой вечер.</p></div>'}</section>`);
+  return shell(`<section><div class="screen-head"><p class="eyebrow">Общий список ♡</p><h2>На потом</h2><p class="lede">Варианты, которые понравились, но не подошли именно сегодня.</p>${state.watchlistHiddenCount ? `<p class="hint">Скрыто сохранённых фильмов: ${state.watchlistHiddenCount}. Русское название или состоявшийся прокат пока не подтверждены. Записи в списке сохранены.</p>` : ''}${items.some(movie => movie.fits_tonight !== null) ? '<p class="hint">Сначала — то, что подходит под сегодняшний план. Остальные фильмы остаются в списке.</p>' : ''}</div>${items.length ? `${filters}${cards}` : '<div class="empty"><h3>Пока пусто</h3><p>Сохраняйте подходящие фильмы из результатов, чтобы вернуться к ним в другой вечер.</p></div>'}</section>`);
 }
 
 function renderSearch() {
@@ -526,6 +544,10 @@ function bindCommon() {
   root.querySelector('[data-action="save-prefs"]')?.addEventListener('click', savePrefs);
   root.querySelector('[data-action="retry-recommendations"]')?.addEventListener('click', recoverRecommendations);
   root.querySelector('[data-action="restart-session"]')?.addEventListener('click', restartSession);
+  root.querySelectorAll('[data-description-key]').forEach(el => el.addEventListener('toggle', () => {
+    if (el.open) state.expandedDescriptions.add(el.dataset.descriptionKey);
+    else state.expandedDescriptions.delete(el.dataset.descriptionKey);
+  }));
   root.querySelectorAll('[data-reaction]').forEach(el => el.addEventListener('click', () => react(el.dataset.reaction)));
   root.querySelectorAll('[data-movie]').forEach(el => el.addEventListener('click', () => { state.modal = state.session.recommendations.find(m => m.id===el.dataset.movie); renderModal(); }));
   root.querySelector('[data-action="choose"]')?.addEventListener('click', choose);
@@ -540,7 +562,11 @@ function bindCommon() {
   root.querySelector('[data-watchlist-genre]')?.addEventListener('change', event => { state.watchlistGenre=event.target.value; refreshWatchlistResults(); });
   root.querySelector('[data-action="reset-watchlist-filters"]')?.addEventListener('click', () => { state.watchlistQuery=''; state.watchlistGenre=''; render(); });
   root.querySelector('[data-action="choose-another"]')?.addEventListener('click', chooseAnother);
-  root.querySelector('[data-action="watched"]')?.addEventListener('click', watched);
+  root.querySelector('[data-action="start-watching"]')?.addEventListener('click', startWatching);
+  root.querySelector('[data-action="finish-and-rate"]')?.addEventListener('click', () => watched(true));
+  root.querySelector('[data-action="finish-without-rating"]')?.addEventListener('click', () => watched(false));
+  root.querySelectorAll('[data-action="rate-history"]').forEach(el => el.addEventListener('click', () => openHistoryRating(Number(el.dataset.historyId))));
+  root.querySelector('[data-action="leave-feedback"]')?.addEventListener('click', () => go('history'));
   root.querySelector('[data-action="decline"]')?.addEventListener('click', declineMovie);
   root.querySelector('[data-action="confirm-avoid-similar"]')?.addEventListener('click', avoidSimilarMovie);
   root.querySelectorAll('[data-action="remove-avoidance"]').forEach(el => el.addEventListener('click', () => removeAvoidance(Number(el.dataset.ruleId))));
@@ -554,7 +580,7 @@ function bindCommon() {
   root.querySelectorAll('[data-action="restore-backup"]').forEach(el => el.addEventListener('click', () => restoreBackup(el.dataset.backupName)));
   root.querySelectorAll('[data-feedback]').forEach(el => el.addEventListener('click', () => saveFeedback(Number(el.dataset.feedback))));
   root.querySelectorAll('[data-evening-fit]').forEach(el => el.addEventListener('click', () => saveEveningFeedback(el.dataset.eveningFit === 'true')));
-  root.querySelector('[data-action="skip-evening-feedback"]')?.addEventListener('click', () => { state.view='home'; render(); });
+  root.querySelector('[data-action="skip-evening-feedback"]')?.addEventListener('click', () => go('history'));
   const searchInput = root.querySelector('[data-action="search-catalog"] input[name="query"]');
   if (searchInput) {
     searchInput.setAttribute('aria-label', 'Название или пример фильма');
@@ -581,6 +607,7 @@ async function go(view) {
   if (view === 'home') { state.view='home'; render(); return; }
   if (view === 'vibe') { state.view='vibe'; render(); return; }
   if (view === 'quick') { state.view='quick'; render(); return; }
+  if (view === 'watching' && state.session?.status === 'watching') { state.view='watching'; render(); return; }
   try {
     if (view === 'catalog' && !isRemoteClient()) { state.view='catalog'; render(); await refreshCatalogStatus(); return; }
     let changes;
@@ -590,7 +617,7 @@ async function go(view) {
     if (view === 'diagnostics') { const usageRequest = isRemoteClient() ? null : api('/api/usage-summary').catch(() => null); const [diagnostics, usage] = await Promise.all([api('/api/diagnostics'), usageRequest]); changes={diagnostics,usageSummary:usage}; }
     if (view === 'taste') { const backupRequest = isRemoteClient() ? null : api('/api/backups'); const [taste, backups] = await Promise.all([api('/api/taste'), backupRequest]); changes={taste,backups:backups?.items || []}; }
     if (view === 'search') changes = {};
-    if (view === 'watchlist') changes = {watchlist:(await api('/api/watchlist')).items};
+    if (view === 'watchlist') { const saved=await api('/api/watchlist'); changes={watchlist:saved.items,watchlistHiddenCount:saved.hidden_unverified_count || 0}; }
     if (changes && request === state.navigationRequest && previousView === state.view) { Object.assign(state, changes); state.view=view; render(); }
   } catch (e) { if (request === state.navigationRequest && previousView === state.view) toast(e.message); }
 }
@@ -624,7 +651,8 @@ async function continueSession() {
       await api(`/api/sessions/${state.session.id}/join`, {method:'POST', body:joinBody(state.user)}); connectWs();
       state.prefs=defaultPrefs(); state.deck=[];
     }
-    if (state.session.status === 'selected') state.view='selected';
+    if (state.session.status === 'watching') state.view='watching';
+    else if (state.session.status === 'selected') state.view='selected';
     else if (state.session.status === 'recommended') state.view='results';
     else if (state.session.participants[state.user]?.ready) state.view='waiting';
     else if (state.session.participants[state.user]?.energy) await loadDeck();
@@ -721,13 +749,17 @@ function bindSwipeGestures() {
   card.focus({preventScroll:true});
   let startX=0, dx=0, active=false;
   card.addEventListener('pointerdown', e => {
-    if (e.target.closest('button')) return;
+    if (e.target.closest('button, details')) return;
     active=true; startX=e.clientX; card.setPointerCapture(e.pointerId);
   });
   card.addEventListener('pointermove', e => { if(!active)return; dx=e.clientX-startX; card.style.transform=`translateX(${dx}px) rotate(${dx/25}deg)`; });
   card.addEventListener('pointerup', () => { if(!active)return; active=false; if(Math.abs(dx)>90) react(dx>0?'like':'dislike'); else card.style.transform=''; dx=0; });
   card.addEventListener('pointercancel', () => { active=false; dx=0; card.style.transform=''; });
-  card.addEventListener('keydown', e => { const map={ArrowLeft:'dislike',ArrowRight:'like',ArrowUp:'love',ArrowDown:'okay','?':'unseen'}; if(map[e.key]){e.preventDefault();react(map[e.key]);} });
+  card.addEventListener('keydown', e => {
+    if (e.target.closest('button, details')) return;
+    const map={ArrowLeft:'dislike',ArrowRight:'like',ArrowUp:'love',ArrowDown:'okay','?':'unseen'};
+    if(map[e.key]){e.preventDefault();react(map[e.key]);}
+  });
 }
 
 async function choose() {
@@ -750,9 +782,29 @@ async function chooseAnother() {
   catch(e){toast('Хорошие варианты закончились — начните новый вечер');}
 }
 
-async function watched() {
-  try { const result=await api(`/api/sessions/${state.session.id}/watched`,{method:'POST'}); state.historyId=result.history_id; state.view='feedback'; render(); }
+async function startWatching() {
+  try { state.session=await api(`/api/sessions/${state.session.id}/start-watching`,{method:'POST'}); state.view=state.session.status==='watching'?'watching':'home'; render(); }
   catch(e) { toast(e.message); }
+}
+
+async function watched(rate = true) {
+  try {
+    const result=await api(`/api/sessions/${state.session.id}/watched`,{method:'POST'});
+    state.session.status='completed'; state.historyId=result.history_id; state.feedbackMovie=result.movie;
+    if (rate) { state.view='feedback'; render(); } else await go('history');
+  } catch(e) { toast(e.message); }
+}
+
+async function openHistoryRating(historyId) {
+  if (!state.user) return;
+  const fromView = state.view;
+  try {
+    const history=await api('/api/history');
+    if (state.view !== fromView) return;
+    const item=history.items.find(entry=>entry.history_id===historyId);
+    if (!item) { toast('Просмотр не найден'); return; }
+    state.historyId=historyId; state.feedbackMovie=item.movie; state.view='feedback'; render();
+  } catch(e) { toast(e.message); }
 }
 
 async function declineMovie() {
@@ -896,7 +948,7 @@ async function saveFeedback(rating) {
 }
 
 async function saveEveningFeedback(fit) {
-  try { await api(`/api/history/${state.historyId}/evening-feedback`,{method:'POST',body:JSON.stringify({user_id:state.user,fit})}); toast('Запомнили. Следующий выбор станет точнее'); state.view='home'; render(); }
+  try { await api(`/api/history/${state.historyId}/evening-feedback`,{method:'POST',body:JSON.stringify({user_id:state.user,fit})}); toast('Оценка сохранена'); await go('history'); }
   catch(e) { toast(e.message); }
 }
 
@@ -971,7 +1023,8 @@ function applyRealtimeSession(nextSession) {
   state.session = nextSession;
   if (nextSession.status === 'recommended' && state.view === 'waiting') state.view = 'results';
   if (nextSession.status === 'selected' && ['results','waiting'].includes(state.view)) state.view = 'selected';
-  if (nextSession.status === 'completed' && previousStatus !== 'completed' && ['selected','results','waiting','swipe'].includes(state.view)) openPendingFeedback();
+  if (nextSession.status === 'watching' && ['selected','results','waiting','swipe'].includes(state.view)) state.view='watching';
+  if (nextSession.status === 'completed' && ['selected','watching','results','waiting','swipe'].includes(state.view)) state.view='home';
 }
 
 async function restoreAfterReconnect(ws, recovered) {
@@ -1018,7 +1071,7 @@ async function openPendingFeedback() {
     const history = await api('/api/history');
     if (state.session?.id !== sessionId || state.user !== user || state.view !== view) return;
     const pending = history.items.find(item => item.session_id === sessionId && item.ratings[user] == null);
-    if (pending) { state.historyId = pending.history_id; state.view = 'feedback'; render(); }
+    if (pending) { state.historyId = pending.history_id; state.feedbackMovie=pending.movie; state.view = 'feedback'; render(); }
   } catch (_) {}
 }
 
@@ -1037,11 +1090,6 @@ async function init() {
       } catch (error) {
         if (!isRemoteClient()) throw error;
         forgetLocalViewer(); state.view='home'; render(); return;
-      }
-      if (state.session.status === 'completed') {
-        const history = await api('/api/history');
-        const pending = history.items.find(item => item.session_id === state.session.id && item.ratings[state.user] == null);
-        if (pending) { state.historyId = pending.history_id; state.view = 'feedback'; }
       }
       connectWs();
     }

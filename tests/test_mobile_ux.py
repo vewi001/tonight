@@ -8,6 +8,55 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_manual_rating_uses_history_movie_without_changing_current_evening():
+    if not shutil.which('node'):
+        pytest.skip('Node required')
+    script = r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const storage={getItem:()=>null,setItem:()=>{},removeItem:()=>{}};
+const sandbox={document:{querySelector:()=>({})},localStorage:storage,sessionStorage:storage,
+location:{hostname:'localhost'},setTimeout:()=>{},clearTimeout:()=>{}};
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync('frontend/app.js','utf8').replace(/\ninit\(\);\s*$/,''),sandbox);
+vm.runInContext(`render=()=>{}; shell=x=>x; toast=()=>{};
+state.user='lera'; state.view='selected'; state.session={id:7,status:'selected',selected:{title:'Текущий фильм'}};
+let calls=[]; api=async(path,options)=>{calls.push(path);return {...state.session,status:'watching'}};`,sandbox);
+(async()=>{
+ await vm.runInContext('startWatching()',sandbox);
+ assert.equal(vm.runInContext('state.view',sandbox),'watching');
+ assert.equal(vm.runInContext('calls.length',sandbox),1);
+ assert.match(vm.runInContext('renderWatching()',sandbox),/Просмотр окончен — оценить/);
+ vm.runInContext("state.view='history'",sandbox);
+ await vm.runInContext("go('watching')",sandbox);
+ assert.equal(vm.runInContext('state.view',sandbox),'watching');
+ vm.runInContext(`state.view='history'; api=async()=>({items:[{history_id:9,movie:{title:'Старый фильм'}}]});`,sandbox);
+ await vm.runInContext('openHistoryRating(9)',sandbox);
+ assert.equal(vm.runInContext('state.view',sandbox),'feedback');
+ assert.equal(vm.runInContext('state.session.id',sandbox),7);
+ assert.equal(vm.runInContext('state.session.status',sandbox),'watching');
+ assert.match(vm.runInContext('renderFeedback()',sandbox),/Старый фильм/);
+ assert.doesNotMatch(vm.runInContext('renderFeedback()',sandbox),/Текущий фильм/);
+ vm.runInContext('api=async(path)=>{calls.push(path);return {}};',sandbox);
+ await vm.runInContext('saveFeedback(4)',sandbox);
+ assert.equal(vm.runInContext('calls[calls.length-1]',sandbox),'/api/history/9/feedback');
+})().catch(e=>{console.error(e);process.exitCode=1});
+'''
+    result = subprocess.run(['node', '-e', script], cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_main_typeface_is_bundled_and_inherited_by_all_text_controls():
+    css=(ROOT/'frontend/styles.css').read_text(encoding='utf-8')
+    assert 'src:url(\'/assets/fonts/NotoSans-Regular.woff2\')' in css
+    assert 'font-weight:100 900' in css and 'font-synthesis:none' in css
+    assert 'button, input, select, textarea { font:inherit;' in css
+    assert all('Tonight Sans' in value or value.strip()=='inherit'
+               for value in re.findall(r'font-family:([^;]+)',css))
+    font=ROOT/'frontend/fonts/NotoSans-Regular.woff2'
+    assert font.read_bytes()[:4]==b'wOF2'
+    assert (ROOT/'frontend/fonts/OFL.txt').is_file()
+
+
 def test_mobile_navigation_has_labels_disclosure_and_unchanged_permissions():
     if not shutil.which('node'):
         pytest.skip('Node required')
@@ -107,7 +156,7 @@ vm.runInContext('let feedbackCalls=0; const originalFeedback=openPendingFeedback
 assert.equal(vm.runInContext('feedbackCalls',sandbox),0);
 assert.equal(vm.runInContext('state.view',sandbox),'watchlist');
 vm.runInContext('state.session.status="selected"; state.view="selected"; applyRealtimeSession({id:1,status:"completed"})',sandbox);
-assert.equal(vm.runInContext('feedbackCalls',sandbox),1); // A new completion still opens rating.
+assert.equal(vm.runInContext('feedbackCalls',sandbox),0); // Ratings open only after an explicit action.
 vm.runInContext('openPendingFeedback=originalFeedback; state.user="lera"; state.view="selected"; let finish; api=()=>new Promise(resolve=>finish=resolve); let pending= openPendingFeedback(); state.view="search"; finish({items:[{session_id:1,history_id:2,ratings:{lera:null}}]})',sandbox);
 (async()=>{await vm.runInContext('pending',sandbox);assert.equal(vm.runInContext('state.view',sandbox),'search')})().catch(e=>{console.error(e);process.exitCode=1});
 '''
@@ -159,4 +208,36 @@ vm.runInContext('state.session.selected=film',sandbox);
 assert(vm.runInContext('renderSelected()',sandbox).includes('Полное описание'));
 '''
     result = subprocess.run(['node', '-e', script], cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_reading_full_card_description_never_votes_and_survives_repaint():
+    if not shutil.which('node'):
+        pytest.skip('Node required')
+    script = r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const handlers={}; let captures=0;
+const card={focus:()=>{},style:{},setPointerCapture:()=>captures++,addEventListener:(name,fn)=>handlers[name]=fn};
+const storage={getItem:()=>null,setItem:()=>{},removeItem:()=>{}};
+const sandbox={document:{querySelector:selector=>selector==='#swipe-card'?card:{}},
+localStorage:storage,sessionStorage:storage,location:{hostname:'localhost'},setTimeout:()=>{},clearTimeout:()=>{}};
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync('frontend/app.js','utf8').replace(/\ninit\(\);\s*$/,''),sandbox);
+vm.runInContext(`let votes=[]; react=value=>votes.push(value); bindSwipeGestures();
+state.user='lera'; state.deck=[{id:'film',title:'Film',overview:'A long description '.repeat(60)+'THE END <script>bad()</script>',year:2020,runtime:90,genres:[],poster_url:'/poster'}]`,sandbox);
+const readingTarget={closest:()=>({})}, cardTarget={closest:()=>null};
+handlers.keydown({target:readingTarget,key:'ArrowDown',preventDefault:()=>assert.fail('reading was intercepted')});
+handlers.pointerdown({target:readingTarget,clientX:0,pointerId:1});
+handlers.pointermove({clientX:200}); handlers.pointerup();
+assert.equal(captures,0); assert.equal(vm.runInContext('votes.length',sandbox),0);
+handlers.keydown({target:cardTarget,key:'ArrowRight',preventDefault:()=>{}});
+assert.equal(vm.runInContext('votes.join()',sandbox),'like');
+let html=vm.runInContext('renderSwipe()',sandbox);
+assert(html.includes('Раскрыть целиком') && html.includes('THE END &lt;script&gt;') && !html.includes('<script>bad'));
+assert(html.indexOf('card-description')>html.indexOf('poster-copy'));
+vm.runInContext("state.expandedDescriptions.add('film')",sandbox);
+html=vm.runInContext('renderSwipe()',sandbox);
+assert(/data-description-key="film" open/.test(html));
+'''
+    result = subprocess.run(['node','-e',script],cwd=ROOT,capture_output=True,text=True)
     assert result.returncode == 0, result.stderr

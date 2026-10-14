@@ -35,8 +35,9 @@ def franchises() -> list[dict[str, Any]]:
                 "released": is_released(movie),
                 "available": is_released(movie) and _part_state(movie, parts, watched),
             }
-            for movie in parts
+            for movie in parts if movie['id'] in watched or is_released(movie)
         ]
+        if not display_parts: continue
         next_movie = next((movie for movie in display_parts if not movie["watched"] and movie["available"]), None)
         first = parts[0]
         result.append(
@@ -44,6 +45,8 @@ def franchises() -> list[dict[str, Any]]:
                 "key": key,
                 "title": f"Серия «{first['title']}»",
                 "parts": display_parts,
+                "part_count":len(parts),
+                "hidden_unverified_count":len(parts)-len(display_parts),
                 "watched_count": sum(movie["watched"] for movie in display_parts),
                 "next_movie": next_movie,
             }

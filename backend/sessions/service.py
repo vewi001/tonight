@@ -21,7 +21,7 @@ def _title(day: date) -> str:
 def active_session(create: bool = True) -> dict[str, Any] | None:
     today = date.today().isoformat()
     with db_session() as db:
-        row = db.execute("SELECT * FROM sessions WHERE session_date=? ORDER BY id DESC LIMIT 1", (today,)).fetchone()
+        row = db.execute("SELECT * FROM sessions WHERE status='watching' OR session_date=? ORDER BY (status='watching') DESC, id DESC LIMIT 1", (today,)).fetchone()
         if not row and create:
             now = datetime.now().isoformat(timespec="seconds")
             cur = db.execute(
@@ -167,6 +167,8 @@ def choose_movie(session_id: int, exclude_current: bool = False) -> dict[str, An
         if not session:
             raise ValueError("session not found")
         rejected = loads(session["rejected_movies"], [])
+        if session['status'] == 'watching':
+            raise ValueError('Сначала завершите текущий просмотр')
         if exclude_current and session["selected_movie_id"] and session["selected_movie_id"] not in rejected:
             rejected.append(session["selected_movie_id"])
         candidates = []
@@ -175,7 +177,7 @@ def choose_movie(session_id: int, exclude_current: bool = False) -> dict[str, An
                 continue
             current = get_movie(item["id"])
             if current and is_released(current):
-                candidates.append(item)
+                candidates.append({**item,**current})
         if not candidates:
             raise ValueError("no candidates left")
         top = candidates[: min(4, len(candidates))]
@@ -193,10 +195,12 @@ def choose_movie(session_id: int, exclude_current: bool = False) -> dict[str, An
 def choose_specific_recommendation(session_id: int, movie_id: str) -> dict[str, Any]:
     """Accept the couple's visible top pick without a second random draw."""
     with db_session() as db:
-        session = db.execute("SELECT recommendations,rejected_movies FROM sessions WHERE id=?", (session_id,)).fetchone()
+        session = db.execute("SELECT recommendations,rejected_movies,status FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not session:
             raise ValueError("session not found")
         rejected = set(loads(session["rejected_movies"], []))
+        if session['status'] == 'watching':
+            raise ValueError('Сначала завершите текущий просмотр')
         recommendations = loads(session["recommendations"], [])
         movie = get_movie(movie_id)
         if movie_id in rejected or movie_id not in {item.get("id") for item in recommendations} or not movie or not is_released(movie):
@@ -213,12 +217,14 @@ def choose_saved_movie(session_id: int, movie_id: str) -> dict[str, Any]:
     """Choose a movie from the couple's shared watchlist."""
     movie = get_movie(movie_id)
     with db_session() as db:
-        session = db.execute("SELECT id FROM sessions WHERE id=?", (session_id,)).fetchone()
+        session = db.execute("SELECT id,status FROM sessions WHERE id=?", (session_id,)).fetchone()
         saved = db.execute("SELECT movie_id FROM watchlist WHERE movie_id=?", (movie_id,)).fetchone()
         if not session:
             raise ValueError("session not found")
         if not saved:
             raise ValueError("movie is not in watchlist")
+        if session['status'] == 'watching':
+            raise ValueError('Сначала завершите текущий просмотр')
         if not movie:
             raise ValueError("movie not found")
         if not is_released(movie):
@@ -240,7 +246,7 @@ def choose_catalog_movie(session_id: int, movie_id: str) -> dict[str, Any]:
         raise ValueError("movie is not released")
     with db_session() as db:
         session = db.execute("SELECT id,status FROM sessions WHERE id=?", (session_id,)).fetchone()
-        if not session or session["status"] == "completed":
+        if not session or session["status"] in {"completed", "watching"}:
             raise ValueError("session is not available")
         selected_at = datetime.now().isoformat(timespec="seconds")
         db.execute(
@@ -248,6 +254,21 @@ def choose_catalog_movie(session_id: int, movie_id: str) -> dict[str, Any]:
             (movie_id, selected_at, selected_at, session_id),
         )
     return movie
+
+
+def start_watching(session_id: int) -> dict[str, Any]:
+    """Start the film without inventing a completed viewing or a rating."""
+    with db_session() as db:
+        db.execute('BEGIN IMMEDIATE')
+        session = db.execute('SELECT status,selected_movie_id FROM sessions WHERE id=?',(session_id,)).fetchone()
+        if not session or not session['selected_movie_id'] or session['status'] not in {'selected','watching'}:
+            raise ValueError('Сначала выберите фильм')
+        if session['status']=='selected':
+            movie=get_movie(session['selected_movie_id'])
+            if not movie or not is_released(movie): raise ValueError('Фильм пока недоступен для выбора')
+            db.execute("UPDATE sessions SET status='watching',updated_at=? WHERE id=?",
+                       (datetime.now().isoformat(timespec='seconds'),session_id))
+    return session_state(session_id)
 
 
 def confirm_watched(session_id: int) -> dict[str, Any]:
@@ -338,7 +359,7 @@ def _franchise_warning(db: Any, movie: Any, watched: set[str]) -> str | None:
     return None
 
 
-def saved_movies() -> list[dict[str, Any]]:
+def saved_movies(*, include_unverified: bool = False) -> list[dict[str, Any]]:
     with db_session() as db:
         rows = db.execute(
             "SELECT m.*,w.saved_at,w.saved_by,w.deferred_reason FROM watchlist w JOIN movies m ON m.id=w.movie_id ORDER BY w.saved_at DESC"
@@ -357,6 +378,8 @@ def saved_movies() -> list[dict[str, Any]]:
         for row in rows
     ]
     has_today_context = bool(desired_genres) or max_runtime is not None
+    if not include_unverified:
+        items = [item for item in items if is_released(item)]
     for item in items:
         mood_match = not desired_genres or bool(desired_genres.intersection(item["genres"]))
         time_match = max_runtime is None or (item["runtime"] is not None and item["runtime"] <= max_runtime)
@@ -409,6 +432,8 @@ def session_state(session_id: int, db: Any | None = None) -> dict[str, Any]:
         for p in participants:
             people[p["user_id"]] = {"joined": True, "progress": p["progress"], "ready": bool(p["ready"]), "moods": loads(p["moods"], []), "energy": p["energy"]}
         selected = get_movie(row["selected_movie_id"]) if row["selected_movie_id"] else None
+        if selected and row['status'] not in {'completed','watching'} and not is_released(selected):
+            selected = None  # Preserve DB selection; do not offer it again.
         rejected = set(loads(row["rejected_movies"], []))
         recommendations = []
         for item in loads(row["recommendations"], []):
@@ -417,10 +442,7 @@ def session_state(session_id: int, db: Any | None = None) -> dict[str, Any]:
             current = get_movie(item["id"])
             if not current or not is_released(current):
                 continue
-            item["poster_url"] = current["poster_url"]
-            item["backdrop_url"] = current["backdrop_url"]
-            item["trailer_url"] = current["trailer_url"]
-            recommendations.append(item)
+            recommendations.append({**item,**current})
         # Recommendations are persisted snapshots. Refresh their media URLs so
         # a poster downloaded after matching immediately replaces cached art.
         recommendation_context = None

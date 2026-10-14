@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.parse
@@ -90,6 +91,50 @@ def build_feed_candidates(
             seen.add(movie_id)
             output.append({**item, "_catalog_sources": sources_by_id[movie_id]})
     return output
+
+
+def verified_availability(detail: dict, today: date | None = None) -> dict | None:
+    """Read explicit translation and theatrical evidence, never language fallback."""
+    today = today or date.today()
+    if not isinstance(detail,dict) or detail.get('status')!='Released': return None
+    translation_payload = detail.get('translations')
+    translations = translation_payload.get('translations',[]) if isinstance(translation_payload,dict) else []
+    if not isinstance(translations,list): return None
+    titles = [entry for entry in translations if isinstance(entry,dict) and entry.get('iso_639_1')=='ru'
+              and isinstance(entry.get('data'),dict) and isinstance(entry['data'].get('title'),str)
+              and entry['data']['title'].strip()]
+    titles.sort(key=lambda entry:entry.get('iso_3166_1')!='RU')
+    russian = titles[0]['data']['title'].strip() if titles else None
+    if not russian and detail.get('original_language')=='ru':
+        original = detail.get('original_title')
+        if isinstance(original,str) and original.strip(): russian=original.strip()
+    if not russian: return None
+    releases = []
+    release_payload = detail.get('release_dates')
+    regions = release_payload.get('results',[]) if isinstance(release_payload,dict) else []
+    if not isinstance(regions,list): return None
+    for region in regions:
+        if not isinstance(region,dict): continue
+        country = region.get('iso_3166_1')
+        if not isinstance(country,str) or not re.fullmatch('[A-Z]{2}',country): continue
+        release_entries = region.get('release_dates',[])
+        if not isinstance(release_entries,list): continue
+        for release in release_entries:
+            if not isinstance(release,dict): continue
+            kind,value = release.get('type'),release.get('release_date')
+            if type(kind) is not int or kind not in (2,3) or not isinstance(value,str): continue
+            try:
+                # TMDB returns ISO timestamps; do not accept just an old year.
+                parsed = datetime.fromisoformat(value.replace('Z','+00:00'))
+                exact = parsed.date()
+                if not re.match(r'\d{4}-\d{2}-\d{2}(?:T|$)',value) or exact>today: continue
+            except ValueError:
+                continue
+            releases.append((exact,country,kind))
+    if not releases: return None
+    exact,country,kind = min(releases)
+    return dict(russian_title=russian,theatrical_release_date=exact.isoformat(),
+                theatrical_release_country=country,theatrical_release_type=kind,release_status='Released')
 
 
 def _replace_movie_id_in_sessions(db, old_id: str, new_id: str) -> None:
@@ -190,7 +235,10 @@ def persist_movie(
     tmdb_id = int(detail["id"])
     release_date = detail["release_date"]
     year = int(release_date[:4])
-    original_title = detail.get("original_title") or detail.get("title") or ""
+    original_title = detail.get("original_title") or ""
+    verified = detail.get('_verified_availability') or verified_availability(detail)
+    if verified is None:
+        raise ValueError('Movie has no confirmed Russian title and theatrical release')
     tmdb_movie_id = f"tmdb-{tmdb_id}"
     with db_session() as db:
         by_tmdb = db.execute("SELECT * FROM movies WHERE tmdb_id=? OR id=?", (tmdb_id, tmdb_movie_id)).fetchone()
@@ -217,13 +265,14 @@ def persist_movie(
     director = next((item["name"] for item in detail.get("credits", {}).get("crew", []) if item.get("job") == "Director"), None)
     cast = [item["name"] for item in detail.get("credits", {}).get("cast", [])[:6]]
     values = (
-        detail.get("title") or original_title, original_title, year, release_date, dumps(genres), detail.get("overview") or "",
+        verified['russian_title'], original_title, year, release_date, dumps(genres), detail.get("overview") or "",
         detail.get("runtime"), detail.get("vote_average"), detail.get("vote_count", 0), dumps(keywords), director,
         dumps(cast), poster, backdrop, detail.get("_franchise_key"), detail.get("_franchise_order"), tmdb_id,
         trailer.get("key") if trailer else None, trailer.get("language") if trailer else None,
         datetime.now().isoformat(timespec="seconds"), dumps(sources), "starter+tmdb" if not canonical_id.startswith("tmdb-") else "tmdb",
     )
     with db_session() as db:
+        # Unknown evidence is explicit NULL; no fabricated legacy confirmations.
         exists = db.execute("SELECT id FROM movies WHERE id=?", (canonical_id,)).fetchone()
         if exists:
             db.execute(
@@ -239,6 +288,12 @@ def persist_movie(
                 trailer_checked_at,catalog_sources,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (canonical_id, *values),
             )
+        evidence = verified or {}
+        db.execute('''UPDATE movies SET russian_title=?,theatrical_release_date=?,theatrical_release_type=?,
+                   theatrical_release_country=?,release_status=? WHERE id=?''',
+                   (evidence.get('russian_title'),evidence.get('theatrical_release_date'),
+                    evidence.get('theatrical_release_type'),evidence.get('theatrical_release_country'),
+                    evidence.get('release_status'),canonical_id))
     return canonical_id
 
 
@@ -264,19 +319,21 @@ def _enrich_and_persist(
     for summary in candidates:
         detail = request(
             f"/movie/{summary['id']}", token,
-            {"language": "ru-RU", "append_to_response": "keywords,credits,videos"},
+            {"language": "ru-RU", "append_to_response": "keywords,credits,videos,translations,release_dates"},
         )
         release = detail.get("release_date") or ""
         try:
             released = date.fromisoformat(release) <= today
         except ValueError:
             released = False
+        evidence = verified_availability(detail,today)
         if (
             detail.get("adult") is True or not released or not detail.get("runtime")
             or float(detail.get("vote_average") or 0) <= 0
-            or int(detail.get("vote_count") or 0) < min_votes
+            or int(detail.get("vote_count") or 0) < min_votes or evidence is None
         ):
             continue
+        detail['_verified_availability'] = evidence
         collection = detail.get("belongs_to_collection") or {}
         collection_id = collection.get("id")
         if collection_id:

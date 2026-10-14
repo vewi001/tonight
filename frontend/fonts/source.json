@@ -1,0 +1,13 @@
+{
+  "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans%5Bwdth,wght%5D.ttf",
+  "source_sha256": "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d",
+  "font_sha256": "f19970a57b42ea90bf688a8f2811f664d120d94adec82e6dda6df420c235d69d",
+  "glyphs": 3094,
+  "checked_latin_cyrillic_digits_punctuation": true,
+  "weight_range": [
+    100,
+    900
+  ],
+  "width_axis_fixed": 100,
+  "license": "SIL OFL 1.1"
+}

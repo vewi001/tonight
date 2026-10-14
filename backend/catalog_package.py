@@ -26,9 +26,13 @@ VERSION = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z')
 IDENTIFIER = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z')
 FIELDS = ('id','title','original_title','year','release_date','genres','overview','runtime',
           'rating','vote_count','keywords','director','cast_names','franchise_key','franchise_order',
-          'tmdb_id','trailer_key','trailer_language','catalog_sources','source')
+          'tmdb_id','trailer_key','trailer_language','catalog_sources','source',
+          'russian_title','theatrical_release_date','theatrical_release_type','theatrical_release_country','release_status')
+VERIFICATION_FIELDS = frozenset(('russian_title','theatrical_release_date','theatrical_release_type',
+                                 'theatrical_release_country','release_status'))
 ARRAY_FIELDS = {'genres','keywords','cast_names','catalog_sources'}
 INT_RANGES = {'year':(1888,2200),'runtime':(1,1440),'vote_count':(0,2**63-1),
+              'theatrical_release_type':(2,3),
               'franchise_order':(1,10000),'tmdb_id':(1,2**63-1)}
 EXTENSIONS = {'.jpg','.jpeg','.png','.webp'}
 
@@ -110,6 +114,17 @@ def _movies(values):
                 raise CatalogPackageError('Некорректное текстовое поле фильма')
         if not movie['title'].strip():
             raise CatalogPackageError('У фильма отсутствует название')
+        if movie.get('theatrical_release_date') is not None:
+            from datetime import date
+            try:
+                value = movie['theatrical_release_date']
+                if not re.fullmatch(r'\d{4}-\d{2}-\d{2}',value): raise ValueError
+                date.fromisoformat(value)
+            except (TypeError,ValueError):
+                raise CatalogPackageError('Некорректная дата кинотеатрального проката') from None
+        if (movie.get('theatrical_release_country') is not None
+                and not re.fullmatch('[A-Z]{2}',movie['theatrical_release_country'])):
+            raise CatalogPackageError('Некорректная страна проката')
         if movie.get('trailer_key') is not None and not YOUTUBE_KEY.fullmatch(movie['trailer_key']):
             raise CatalogPackageError('Некорректная ссылка на трейлер')
         tmdb_id = movie.get('tmdb_id')
@@ -176,6 +191,8 @@ def read_catalog_package(archive: Path, *, app_version: str | None = None) -> Ca
                     if hashlib.file_digest(source,'sha256').hexdigest()!=expected['sha256']:
                         raise CatalogPackageError('Файл каталога не прошёл проверку')
             movies = _movies(json.loads(bundle.read('movies.json'),object_pairs_hook=_unique_object))
+            if any(VERIFICATION_FIELDS.intersection(movie) for movie in movies) and tuple(map(int,minimum.split('.'))) < (1,6,8):
+                raise CatalogPackageError('Подтверждения каталога требуют Tonight 1.6.8 или новее')
             if type(manifest['movie_count']) is not int or manifest['movie_count']!=len(movies):
                 raise CatalogPackageError('Количество фильмов не совпадает с манифестом')
             identifiers = {movie['id'] for movie in movies}
@@ -218,10 +235,14 @@ def build_catalog_package(source_data: Path, output: Path, *, version: str, min_
                 movie = dict(row)
                 for field in ARRAY_FIELDS & set(movie):
                     movie[field] = json.loads(movie[field]) if movie[field] is not None else []
+                # Keep legacy package shape compatible while proof is unknown.
+                movie = {field:value for field,value in movie.items() if field not in VERIFICATION_FIELDS or value is not None}
                 movies.append(movie)
         _movies(movies)
     except (sqlite3.Error,TypeError,json.JSONDecodeError):
         raise CatalogPackageError('Не удалось прочитать публичные данные фильмов') from None
+    if any(VERIFICATION_FIELDS.intersection(movie) for movie in movies) and tuple(map(int,minimum.split('.'))) < (1,6,8):
+        raise CatalogPackageError('Для каталога с подтверждениями нужен Tonight 1.6.8 или новее')
     payload = json.dumps(movies,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
     if len(payload)>MAX_MOVIES_BYTES:
         raise CatalogPackageError('Описание каталога слишком большое')

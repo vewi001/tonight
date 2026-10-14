@@ -1,3 +1,10 @@
+@font-face {
+  font-family:"Tonight Sans";
+  src:url('/assets/fonts/NotoSans-Regular.woff2') format('woff2');
+  font-style:normal;
+  font-weight:100 900;
+  font-display:swap;
+}
 :root {
   color-scheme: dark;
   --bg: #09080d;
@@ -11,8 +18,11 @@
   --good: #56d49b;
   --shadow: 0 24px 70px rgba(0,0,0,.45);
   --radius: 28px;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family:"Tonight Sans", sans-serif;
+  font-synthesis:none;
   font-size: 16px;
+  font-weight:400;
+  line-height:1.5;
 }
 * { box-sizing: border-box; }
 html { background: var(--bg); scroll-behavior: smooth; }
@@ -20,7 +30,9 @@ body { margin: 0; min-width: 320px; min-height: 100vh; color: var(--text); backg
   radial-gradient(circle at 15% -10%, rgba(255,91,102,.17), transparent 34rem),
   radial-gradient(circle at 88% 12%, rgba(255,146,86,.10), transparent 28rem), var(--bg); }
 body::before { content:""; position:fixed; inset:0; pointer-events:none; opacity:.035; z-index:50; background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.9'/%3E%3C/svg%3E"); }
-button, input { font: inherit; }
+button, input, select, textarea { font:inherit; letter-spacing:normal; }
+button, summary { line-height:1.4; }
+input, select, textarea { line-height:1.5; max-width:100%; min-width:0; }
 button { color: inherit; }
 button:focus-visible, [tabindex]:focus-visible, a:focus-visible { outline: 3px solid #ffb066; outline-offset: 3px; }
 .skip-link { position:fixed; left:1rem; top:-4rem; z-index:100; padding:.8rem 1rem; background:white; color:black; border-radius:.7rem; }
@@ -38,8 +50,8 @@ button:focus-visible, [tabindex]:focus-visible, a:focus-visible { outline: 3px s
 .data-credits img { width:72px; height:auto; display:block; }
 .eyebrow { color:#ff9c76; text-transform:uppercase; font-size:.78rem; font-weight:800; letter-spacing:.16em; margin:0 0 .8rem; }
 h1,h2,h3,p { margin-top:0; overflow-wrap:anywhere; hyphens:auto; }
-h1 { font-size:clamp(2.65rem, 7vw, 6.4rem); line-height:.92; letter-spacing:-.07em; margin-bottom:1rem; }
-h2 { font-size:clamp(2rem, 5vw, 4.3rem); line-height:1; letter-spacing:-.055em; }
+h1 { font-size:clamp(2.65rem, 7vw, 6.4rem); line-height:1.12; letter-spacing:-.035em; margin-bottom:1rem; }
+h2 { font-size:clamp(2rem, 5vw, 4.3rem); line-height:1.15; letter-spacing:-.025em; }
 h3 { font-size:1.2rem; }
 .lede { font-size:clamp(1.05rem,2vw,1.3rem); color:var(--muted); line-height:1.6; max-width:620px; }
 .hero-home { min-height:72vh; display:grid; align-content:center; }
@@ -224,7 +236,7 @@ h3 { font-size:1.2rem; }
   .backup-list article{align-items:flex-start;flex-direction:column}
 }
 /* Mobile readability: preserve content and native page scrolling at larger text sizes. */
-body { font-family:system-ui,-apple-system,"Segoe UI",sans-serif; line-height:1.5; }
+body { font-family:inherit; line-height:1.5; }
 button, input, select, textarea { font:inherit; }
 button, .button, input, select { min-height:44px; }
 button, .button { min-width:44px; }
@@ -243,6 +255,13 @@ h1, h2, h3, .button, .icon-button { overflow-wrap:anywhere; }
 .movie-summary { margin-top:1.2rem; }
 .movie-description { margin:1rem 0; }
 .movie-description p { line-height:1.6; overflow-wrap:anywhere; }
+.card-description { margin-top:.8rem; padding:.2rem 1rem; border:1px solid var(--line); border-radius:16px; background:var(--surface-2); }
+.card-description summary, .movie-description summary { font-weight:600; }
+.description-full { white-space:pre-line; overflow-wrap:anywhere; line-height:1.6; user-select:text; touch-action:pan-y; }
+.description-collapse { display:none; }
+details[open]>.description-full { display:block; overflow:visible; }
+details[open]>summary .description-expand { display:none; }
+details[open]>summary .description-collapse { display:inline; }
 @media(max-width:900px){
   .shell { padding-top:max(1rem,env(safe-area-inset-top,0px)); padding-left:max(.9rem,env(safe-area-inset-left,0px)); padding-right:max(.9rem,env(safe-area-inset-right,0px)); }
   .topbar { justify-content:space-between; margin-bottom:1rem; }
@@ -272,5 +291,7 @@ h1, h2, h3, .button, .icon-button { overflow-wrap:anywhere; }
   .swipe-card { max-width:760px; display:grid; grid-template-columns:minmax(0,1fr) minmax(200px,.7fr); gap:1rem; align-items:start; }
   .swipe-card .poster-wrap>img { height:140px; }
   .reaction-row { margin-top:0; grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .swipe-card>.reaction-row { grid-column:2; grid-row:1; }
+  .swipe-card>.card-description { grid-column:1 / -1; }
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}

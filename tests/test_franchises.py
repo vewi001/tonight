@@ -42,9 +42,8 @@ def test_future_franchise_part_is_not_offered_as_the_next_movie():
 
     group = next(item for item in franchises() if item["key"] == "test-series")
 
-    future_part = next(item for item in group["parts"] if item["id"] == "ex-machina")
-    assert future_part["released"] is False
-    assert future_part["available"] is False
+    assert not any(item['id']=='ex-machina' for item in group['parts'])
+    assert group['hidden_unverified_count']==1
     assert group["next_movie"] is None
 
 
@@ -61,4 +60,4 @@ def test_franchise_page_is_exposed_without_making_the_series_mandatory():
     source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     assert 'data-view="franchises"' in source
     assert "не обязательный маршрут" in source
-    assert "Ещё не вышел в прокат" in source
+    assert "Ещё не смотрели вместе" in source

@@ -65,7 +65,7 @@ def usage_summary() -> dict[str, Any]:
         if value is not None
     ]
     started = len(sessions)
-    with_choice = sum(session["status"] in {"selected", "completed"} for session in sessions)
+    with_choice = sum(session["status"] in {"selected", "watching", "completed"} for session in sessions)
     typical = round(median(durations)) if durations else None
     return {
         "summary": {

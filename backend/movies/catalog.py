@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -26,27 +27,36 @@ def row_to_movie(row: Any) -> dict[str, Any]:
         "keywords": loads(row["keywords"], []), "director": row["director"],
         "franchise_key": row["franchise_key"], "franchise_order": row["franchise_order"],
         "tmdb_id": row["tmdb_id"], "trailer_url": trailer_url(row["trailer_key"]),
+        **{field:row[field] if field in row.keys() else None for field in
+           ('russian_title','theatrical_release_date','theatrical_release_type','theatrical_release_country','release_status')},
         "poster_url": media_url(row["id"], "poster", row["poster_path"]),
         "backdrop_url": media_url(row["id"], "backdrop", row["backdrop_path"]),
     }
 
 
 def is_released(movie: dict[str, Any], reference_day: date | None = None) -> bool:
-    """Only offer films whose official release has already happened.
+    """Only confirmed Russian titles with a past theatrical release are offered.
 
-    Older catalog records did not save a full release date. They are safe when
-    their year has already passed; current-year records without an exact date
-    stay hidden until a catalog refresh can verify them.
+    General release_date, old year or a language request are never evidence.
+    Legacy records remain stored and hidden until their metadata is verified.
     """
     reference_day = reference_day or date.today()
-    release = movie.get("release_date")
-    if release:
-        try:
-            return date.fromisoformat(str(release)) <= reference_day
-        except ValueError:
-            return False
-    year = movie.get("year")
-    return isinstance(year, int) and year < reference_day.year
+    russian = movie.get('russian_title')
+    if (not isinstance(russian,str) or not russian.strip() or movie.get('title')!=russian
+            or movie.get('release_status')!='Released'
+            or type(movie.get('theatrical_release_type')) is not int or movie['theatrical_release_type'] not in (2,3)
+            or not re.fullmatch('[A-Z]{2}',str(movie.get('theatrical_release_country') or ''))):
+        return False
+    release = movie.get('theatrical_release_date')
+    if not isinstance(release,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',release): return False
+    try:
+        if date.fromisoformat(release)>reference_day: return False
+        # Contradictory catalog metadata also fails closed.
+        primary = movie.get('release_date')
+        if primary and date.fromisoformat(str(primary))>reference_day: return False
+        return True
+    except ValueError:
+        return False
 
 
 def get_movie(movie_id: str) -> dict[str, Any] | None:

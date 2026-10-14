@@ -19,6 +19,14 @@ Tonight uses the TMDB API but is not endorsed or certified by TMDB.
 
 ## Зависимости
 
+`frontend/fonts/NotoSans-Regular.woff2` — Noto Sans, Noto Project Authors,
+SIL Open Font License 1.1. Лицензия находится в `frontend/fonts/OFL.txt`,
+источник и контрольные суммы — `frontend/fonts/source.json`.
+Источник: https://github.com/google/fonts/tree/main/ofl/notosans.
+При подготовке локального WOFF2 ось ширины зафиксирована на обычных 100%;
+ось насыщенности 100–900, кириллица и латиница сохранены. Шрифт поставляется
+локально, приложение не запрашивает его у Google или других внешних сервисов.
+
 Зависимости проекта сохраняют собственные лицензии. Условия Python- и
 JavaScript-библиотек необходимо учитывать при распространении собранных
 версий приложения.

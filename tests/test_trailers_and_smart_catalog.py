@@ -91,6 +91,9 @@ def _detail(movie_id: int, *, title: str, trailer: str | None = None) -> dict:
         "genres": [{"id": 18, "name": "Drama"}], "overview": "Описание", "poster_path": None,
         "backdrop_path": None, "keywords": {"keywords": []}, "credits": {"crew": [], "cast": []},
         "videos": {"results": videos}, "belongs_to_collection": None,
+        "status":"Released", "original_language":"en",
+        "translations":{"translations":[{"iso_639_1":"ru","iso_3166_1":"RU","data":{"title":title}}]},
+        "release_dates":{"results":[{"iso_3166_1":"US","release_dates":[{"type":3,"release_date":"2024-01-01T00:00:00Z"}]}]},
     }
 
 

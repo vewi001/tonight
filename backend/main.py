@@ -45,7 +45,7 @@ from backend.release import APP_VERSION, ReleaseError
 from backend.auto_update import UpdateManager, UpdateError
 from backend.update_install import prepare_handoff
 from backend.sessions.service import (
-    active_session, both_ready, choose_catalog_movie, choose_movie, choose_saved_movie, choose_specific_recommendation, confirm_watched, decline_selected_movie, ensure_participant,
+    active_session, both_ready, choose_catalog_movie, choose_movie, choose_saved_movie, choose_specific_recommendation, confirm_watched, start_watching, decline_selected_movie, ensure_participant,
     WATCHLIST_REASONS, get_deck, record_connection_restored, remove_saved_movie, save_movie_for_later, save_preferences, save_swipe, saved_movies, session_access_code, session_state, store_recommendations,
 )
 from backend.usage_metrics import usage_summary
@@ -590,6 +590,16 @@ async def select_catalog(session_id: int, movie_id: str) -> dict:
     return selected
 
 
+@app.post("/api/sessions/{session_id}/start-watching")
+async def begin_watching(session_id: int) -> dict:
+    try:
+        result=start_watching(session_id)
+    except ValueError as exc:
+        raise HTTPException(409,str(exc)) from exc
+    await publish_state(session_id,'watching')
+    return result
+
+
 @app.post("/api/sessions/{session_id}/watched")
 async def watched(session_id: int) -> dict:
     try:
@@ -672,7 +682,8 @@ async def history() -> dict:
 
 @app.get("/api/watchlist")
 async def watchlist() -> dict:
-    return {"items": saved_movies()}
+    items = saved_movies()
+    return {"items":items,"hidden_unverified_count":len(saved_movies(include_unverified=True))-len(items)}
 
 
 @app.get("/api/weekly-picks")
