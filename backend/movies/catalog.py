@@ -25,6 +25,7 @@ def row_to_movie(row: Any) -> dict[str, Any]:
         "year": row["year"], "release_date": row["release_date"], "genres": normalize_genres(loads(row["genres"], [])), "overview": row["overview"] or "",
         "runtime": row["runtime"], "rating": row["rating"], "vote_count": row["vote_count"],
         "keywords": loads(row["keywords"], []), "director": row["director"],
+        "cast_names": loads(row["cast_names"], []),
         "franchise_key": row["franchise_key"], "franchise_order": row["franchise_order"],
         "tmdb_id": row["tmdb_id"], "trailer_url": trailer_url(row["trailer_key"]),
         **{field:row[field] if field in row.keys() else None for field in

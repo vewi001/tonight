@@ -11,6 +11,9 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from typing import Literal
+from pydantic import BaseModel, Field, model_validator
+
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -41,6 +44,7 @@ from backend.recommendation.engine import recommend
 from backend.recommendation.avoidance import add_avoidance, list_avoidances, remove_avoidance
 from backend.recommendation.taste_profile import exclude_genre, profile_filters, reset_profile
 from backend.recommendation.weekly import weekly_picks
+from backend.recommendation.personal import personal_recommendations
 from backend.release import APP_VERSION, ReleaseError
 from backend.auto_update import UpdateManager, UpdateError
 from backend.update_install import prepare_handoff
@@ -124,6 +128,15 @@ async def _catalog_refresh_loop() -> None:
 
 
 app = FastAPI(title="Tonight", version=APP_VERSION, lifespan=lifespan)
+
+
+@app.middleware('http')
+async def invalidate_personal_recommendations(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith('/api/') and request.method in {'POST', 'PUT', 'PATCH', 'DELETE'} and response.status_code < 400:
+        for session_id in list(manager.connections):
+            await manager.broadcast(session_id, {'type': 'personal_changed'})
+    return response
 
 
 async def publish_state(session_id: int, event: str = "state") -> None:
@@ -689,6 +702,58 @@ async def watchlist() -> dict:
 @app.get("/api/weekly-picks")
 async def get_weekly_picks() -> dict:
     return {"items": weekly_picks()}
+
+
+@app.get('/api/recommendations/personal/{user_id}')
+async def get_personal_recommendations(user_id: str) -> dict:
+    if user_id not in {'lera', 'nikita'}:
+        raise HTTPException(400, 'Неизвестный пользователь')
+    return await asyncio.to_thread(personal_recommendations, user_id)
+
+
+class TonightModeIn(BaseModel):
+    mood: Literal['laugh','scary','cozy','wow','smart','atmosphere','surprise'] = 'surprise'
+    max_runtime: Literal[90,120,150] | None = None
+    company: Literal['solo','couple','friends','family'] = 'solo'
+    min_rating: float = Field(default=0, ge=0, le=10)
+    min_year: int | None = Field(default=None, ge=1888, le=2100)
+    max_year: int | None = Field(default=None, ge=1888, le=2100)
+    excluded_genres: list[str] = Field(default_factory=list, max_length=40)
+    exclude_watched: bool = True
+    seen_ids: list[str] = Field(default_factory=list, max_length=20000)
+
+    @model_validator(mode='after')
+    def valid_years(self):
+        if self.min_year and self.max_year and self.min_year > self.max_year:
+            raise ValueError('Начальный год должен быть не позже конечного')
+        self.excluded_genres = normalize_genres(self.excluded_genres)
+        return self
+
+
+class TonightActionIn(BaseModel):
+    action: Literal['watchlist','watched','dislike']
+
+
+@app.post('/api/tonight/{user_id}/recommendations')
+async def tonight_mode(user_id: str, payload: TonightModeIn) -> dict:
+    if user_id not in {'lera', 'nikita'}:
+        raise HTTPException(400, 'Неизвестный пользователь')
+    return await asyncio.to_thread(personal_recommendations, user_id, 5, tonight=payload.model_dump())
+
+
+@app.post('/api/tonight/{user_id}/movies/{movie_id}')
+async def tonight_action(user_id: str, movie_id: str, payload: TonightActionIn) -> dict:
+    if user_id not in {'lera', 'nikita'}:
+        raise HTTPException(400, 'Неизвестный пользователь')
+    if not get_movie(movie_id):
+        raise HTTPException(404, 'Фильм не найден')
+    if payload.action == 'watchlist':
+        save_movie_for_later(movie_id, user_id)
+    else:
+        with db_session() as db:
+            db.execute('INSERT OR REPLACE INTO viewer_movie_actions(user_id,movie_id,action,created_at) VALUES(?,?,?,?)',
+                       (user_id, movie_id, payload.action, datetime.now().isoformat()))
+    return {'ok': True, 'action': payload.action}
 
 
 @app.get("/api/franchises")

@@ -25,7 +25,11 @@ def canonical_genre(value: str) -> str:
 
 def normalize_genres(values: list[str]) -> list[str]:
     result: list[str] = []
+    if not isinstance(values, (list, tuple, set)):
+        return result
     for value in values:
+        if not isinstance(value, str):
+            continue
         genre = canonical_genre(value)
         if genre and genre not in result:
             result.append(genre)

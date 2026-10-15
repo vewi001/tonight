@@ -298,3 +298,45 @@ details[open]>summary .description-collapse { display:inline; }
   .swipe-card>.card-description { grid-column:1 / -1; }
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}
+
+/* Tonight Mode */
+.tonight-entry {margin:1rem 0 4rem;padding:clamp(1.5rem,5vw,4rem);border:1px solid #b7799655;border-radius:2rem;background:radial-gradient(ellipse at 85% 10%,#a7517844,transparent 60%),linear-gradient(130deg,#241b32,#121016);display:flex;align-items:center;gap:2rem;flex-wrap:wrap;box-shadow:0 25px 90px #a34d7315;}
+.tonight-entry h2 {font-size:clamp(2rem,4vw,3.8rem);max-width:650px;}
+.tonight-entry .lede {max-width:600px;}
+.tonight-mode {animation:fade-in .3s ease both;}
+.tonight-steps {display:flex;gap:.6rem;margin:1rem 0 3rem;flex-wrap:wrap;}
+.tonight-steps button {display:flex;align-items:center;gap:.7rem;border:1px solid var(--line);border-radius:2rem;padding:.75rem 1rem;background:#19151f;cursor:pointer;}
+.tonight-steps .active {border-color:#ffac91;background:#53303b;}
+.tonight-stage {max-width:850px;margin:auto;animation:fade-in .25s ease both;}
+.tonight-choices {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem;}
+.tonight-choices .choice {display:flex;align-items:center;gap:1rem;min-height:95px;cursor:pointer;transition:background .2s,transform .2s;}
+.tonight-choices .selected {border-color:#ffb69b;background:#583343;}
+.tonight-choices .choice:hover {transform:translateY(-2px);}
+.tonight-choice-icon {font-size:2rem;color:#ffb69b;}
+.tonight-options {display:grid;gap:1.5rem;}
+.tonight-options label {display:grid;gap:.5rem;}
+.tonight-options fieldset {border:0;padding:0;margin:0;min-width:0;}
+.tonight-options legend {margin-bottom:.8rem;}
+.tonight-years {display:grid;grid-template-columns:1fr 1fr;gap:1rem;}
+.tonight-options .tonight-check {display:flex;align-items:center;gap:.8rem;}
+.tonight-check input {width:22px;height:22px;accent-color:#f58c9f;}
+.tonight-films {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1.2rem;}
+.tonight-film {min-width:0;border:1px solid var(--line);border-radius:1.5rem;overflow:hidden;background:#19151e;animation:fade-in .35s ease both;}
+.tonight-poster {display:block;width:100%;border:0;padding:0;background:#211a2a;cursor:pointer;}
+.tonight-poster img {width:100%;aspect-ratio:2/3;object-fit:cover;display:block;}
+.tonight-film-body {padding:1.3rem;}
+.tonight-title {font:inherit;color:inherit;text-align:left;background:none;border:0;padding:0;cursor:pointer;}
+.tonight-film h3 {font-size:1.45rem;line-height:1.3;}
+.tonight-film .eyebrow {font-size:.65rem;letter-spacing:.06em;}
+.tonight-overview {display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;}
+.tonight-reason {padding:1rem;border-radius:1rem;background:#ab678018;color:#f8c3cb;font-size:.9rem;}
+.tonight-film-actions {display:grid;gap:.5rem;}
+.tonight-film-actions .button {width:100%;font-size:.85rem;padding:.8rem;}
+.tonight-empty {padding:1.5rem;border:1px solid var(--line);border-radius:1.5rem;margin-bottom:2rem;}
+.tonight-film.is-detail {display:grid;grid-template-columns:minmax(200px,1fr) 2fr;margin-top:1.5rem;}
+@media(max-width:900px){.tonight-films{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media(max-width:560px){.tonight-choices,.tonight-films,.tonight-film.is-detail{grid-template-columns:1fr;}.tonight-entry{border-radius:1.4rem;gap:1rem}.tonight-entry .button{width:100%;}.tonight-steps{gap:.4rem;margin-bottom:2rem}.tonight-steps button{font-size:.75rem;padding:.65rem;gap:.4rem}.tonight-choices .choice{min-height:70px}.tonight-film-body{padding:1.2rem}.tonight-poster img{max-height:600px}.tonight-mode .footer-actions{align-items:stretch}.tonight-mode .footer-actions .button{flex:1 1 auto}}
+@media(prefers-reduced-motion:reduce){.tonight-mode,.tonight-stage,.tonight-film{animation:none}.tonight-choices .choice{transition:none;transform:none}}
+.tonight-poster {position:relative;}
+.tonight-poster-note {position:absolute;bottom:.6rem;left:.6rem;right:.6rem;padding:.45rem;border-radius:.5rem;background:#0b081bcb;color:#e2d5df;font-size:.7rem;}
+.tonight-choices strong {flex:1;text-align:left;}

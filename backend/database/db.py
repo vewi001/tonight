@@ -209,6 +209,19 @@ CREATE TABLE IF NOT EXISTS taste_profile_resets (
     reset_at TEXT NOT NULL,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS viewer_movie_actions (
+    user_id TEXT NOT NULL REFERENCES users(id),
+    movie_id TEXT NOT NULL REFERENCES movies(id),
+    action TEXT NOT NULL CHECK(action IN ('watched','dislike')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(user_id,movie_id,action)
+);
+CREATE TABLE IF NOT EXISTS personal_impressions (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    movie_id TEXT NOT NULL REFERENCES movies(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    PRIMARY KEY(user_id, day, movie_id)
+);
 CREATE TABLE IF NOT EXISTS app_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

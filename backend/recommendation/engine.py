@@ -8,7 +8,7 @@ from backend.database.db import db_session, loads
 from backend.movies.catalog import _franchise_is_available, is_released, row_to_movie
 from backend.movies.genres import normalize_genres
 from backend.recommendation.avoidance import load_avoidance_rules, similarity_penalty
-from backend.recommendation.taste_profile import profile_filters
+from backend.recommendation.taste_profile import taste_signals
 
 REACTION_SCORE = {"love": 0.98, "like": 0.80, "okay": 0.60, "dislike": 0.04, "unseen": 0.52}
 MOOD_GENRES = {
@@ -52,28 +52,13 @@ def _participant_context(db: Any, session_id: int, user_id: str) -> dict[str, An
 def _taste_profile(db: Any, session_id: int, user_id: str) -> tuple[dict[str, float], dict[str, float]]:
     genre_points: dict[str, list[float]] = defaultdict(list)
     keyword_points: dict[str, list[float]] = defaultdict(list)
-    excluded_genres, swipe_cutoff, feedback_cutoff = profile_filters(db, user_id)
-    rows = db.execute(
-        """SELECT s.rowid signal_rowid,m.genres,m.keywords,s.reaction FROM swipes s JOIN movies m ON m.id=s.movie_id
-        WHERE s.session_id=? AND s.user_id=? AND s.rowid>?""", (session_id, user_id, swipe_cutoff)
-    ).fetchall()
-    for row in rows:
-        value = REACTION_SCORE[row["reaction"]]
-        if row["reaction"] == "unseen":
-            continue
-        for genre in normalize_genres(loads(row["genres"], [])):
-            if genre not in excluded_genres: genre_points[genre].append(value)
-        for keyword in loads(row["keywords"], []): keyword_points[keyword].append(value)
-    history = db.execute(
-        """SELECT f.rowid signal_rowid,m.genres,m.keywords,f.rating FROM feedback f
-        JOIN watch_history h ON h.id=f.history_id JOIN movies m ON m.id=h.movie_id
-        WHERE f.user_id=? AND f.rowid>?""", (user_id, feedback_cutoff)
-    ).fetchall()
-    for row in history:
-        value = (row["rating"] - 1) / 4
-        for genre in normalize_genres(loads(row["genres"], [])):
-            if genre not in excluded_genres: genre_points[genre].append(value)
-        for keyword in loads(row["keywords"], []): keyword_points[keyword].append(value)
+    for signal in taste_signals(db, user_id, session_id):
+        value = (signal['value'] + 1) / 2
+        for genre in signal['genres']:
+            genre_points[genre].append(value)
+        for keyword in signal['keywords'] or []:
+            if isinstance(keyword, str):
+                keyword_points[keyword].append(value)
     return (
         {key: sum(values) / len(values) for key, values in genre_points.items()},
         {key: sum(values) / len(values) for key, values in keyword_points.items()},
