@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,8 +36,11 @@ Tonight Mode: настроение, время, компания и фильтр
 Пакеты каталога проверяются на совместимость, размер и SHA-256.
 С 1.8.0 для известной версии скачиваются только изменения, если они доступны.
 Поддерживается зеркало на Яндекс Диске с возвратом к GitHub при ошибке.
-У пользователей нет токена автора; свой TMDB-токен нужен только для
-самостоятельного получения новых данных напрямую из TMDB.
+На главной есть «Больше фильмов и постеров»: выберите 20, 50 или 100 фильмов.
+Загрузку можно начать с компьютера или подключённого телефона. Фильмы
+сохраняются на компьютере; телефон можно закрыть. Есть прогресс и остановка.
+По решению владельца в приложение включён отдельный ключ Tonight для TMDB.
+Пользователю вводить ключ не нужно. Личный ключ в .env имеет приоритет.
 
 Для ручного обновления программы закройте Tonight и откройте
 «Обновить Tonight.exe». Для этой версии пакет — Tonight-update-{version}.zip,
@@ -89,6 +93,11 @@ def _build(script: str, name: str, stage: Path, work: Path, *, assets: bool = Fa
             f"--add-data={ROOT / 'frontend'}{os.pathsep}frontend",
             f"--add-data={ROOT / 'data' / 'art'}{os.pathsep}assets/art",
         ])
+        token = os.getenv('TMDB_READ_TOKEN', '').strip()
+        if token:
+            token_asset = stage / 'app-tmdb.json'
+            token_asset.write_text(json.dumps({'token':token}), encoding='utf-8')
+            args.append(f"--add-data={token_asset}{os.pathsep}.")
     PyInstaller.__main__.run(args)
 
 
@@ -102,6 +111,8 @@ def main() -> None:
     _build("updater.py", "Обновить Tonight", stage, work)
     output.mkdir(parents=True)
     for item in stage.iterdir():
+        if item.name == 'app-tmdb.json':
+            continue  # Included inside the EXE; never copy local environment files.
         shutil.move(str(item), output / item.name)
     shutil.copy2(ROOT / ".env.example", output / ".env.example")
     (output / 'README.txt').write_text(portable_readme(APP_VERSION),encoding='utf-8')

@@ -1,6 +1,7 @@
 # Secrets and local configuration. Keep only the safe example in Git.
 .env
 .env.*
+app-tmdb.json
 !.env.example
 *.pem
 *.key

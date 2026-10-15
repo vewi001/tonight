@@ -36,6 +36,7 @@ from backend.movies.catalog import get_movie, search_movies
 from backend.movies.franchises import franchises
 from backend.movies.genres import normalize_genres
 from backend.movies.catalog_sync import refresh_catalog_if_due, sync_status
+from backend.movies.catalog_expand import CatalogExpansion, ExpansionError
 from backend.movies.media import genre_art, local_media, placeholder_svg
 from backend.movies.seed import seed_movies
 from backend.ollama.client import health as ollama_health, rerank
@@ -58,6 +59,7 @@ STATIC = ASSET_ROOT / "frontend"
 install_expected_disconnect_filter()
 updates = UpdateManager(ROOT, APP_VERSION, install_supported=bool(getattr(sys, "frozen", False)))
 catalog_updates = CatalogUpdateManager(ROOT, APP_VERSION, database=settings.db_path)
+catalog_expansion = CatalogExpansion(ROOT, settings.db_path, lambda: settings.tmdb_read_token)
 _update_shutdown = None
 _update_jobs: set[asyncio.Task] = set()
 _catalog_jobs: set[asyncio.Task] = set()
@@ -108,6 +110,7 @@ async def lifespan(_: FastAPI):
     finally:
         refresh_task.cancel()
         update_task.cancel()
+        catalog_expansion.cancel()
         try:
             await refresh_task
         except asyncio.CancelledError:
@@ -300,6 +303,44 @@ async def catalog_status(request: Request) -> dict:
     with db_session() as db:
         summary = get_catalog_summary(db,ROOT/'data')
     return {'summary':summary,'update':catalog_updates.status()}
+
+
+class ExpandCatalogIn(BaseModel):
+    count: Literal[20, 50, 100] = 50
+
+
+@app.get('/api/catalog/expand')
+async def expansion_status(request: Request):
+    return catalog_expansion.status()
+
+
+@app.post('/api/catalog/expand', status_code=202)
+async def expand_catalog(request: Request, payload: ExpandCatalogIn):
+    _require_expansion_action(request)
+    try:
+        catalog_expansion.reserve(payload.count)
+    except (ExpansionError, UpdateGuardError) as error:
+        raise HTTPException(409, str(error)) from None
+    task = asyncio.create_task(asyncio.to_thread(catalog_expansion.run))
+    _catalog_jobs.add(task)
+    task.add_done_callback(_catalog_jobs.discard)
+    return catalog_expansion.status()
+
+
+@app.post('/api/catalog/expand/cancel')
+async def cancel_catalog_expansion(request: Request):
+    _require_expansion_action(request)
+    return catalog_expansion.cancel()
+
+
+def _require_expansion_action(request: Request):
+    # Remote API middleware requires the current evening code. Unlike program
+    # updates, catalog additions can be requested from an authenticated phone.
+    if request.headers.get('X-Tonight-Update') != '1':
+        raise HTTPException(403, 'Используйте кнопку добавления фильмов в Tonight')
+    origin = request.headers.get('Origin')
+    if origin is not None and origin != str(request.base_url).rstrip('/'):
+        raise HTTPException(403, 'Используйте кнопку добавления фильмов в Tonight')
 
 
 @app.post('/api/catalog/updates/check')

@@ -9,6 +9,7 @@ const state = {
   personal: null, personalUser: null, personalAt: 0, personalPending: false, personalError: '', personalRevision: 0,
   setup: null,
   catalog: null, catalogTimer: null, catalogError: '', catalogRequest: 0,
+  expansion: null, expansionTimer: null, expansionPending: false, expansionCount: 50,
   invite: null,
   update: null, updateTimer: null, updateDismissed: '', updateInstallingFrom: null,
   view: 'loading',
@@ -208,10 +209,77 @@ function participantLine(id) {
   return `<span><i class="dot ${live ? 'online':''}"></i>${names[id]} — ${text}</span>`;
 }
 
+function catalogExpansionCard() {
+  if (isRemoteClient() && !state.accessCode) return '';
+  const job = state.expansion;
+  const busy = job?.phase === 'running';
+  const count = state.expansionCount;
+  const result = job && ['done','cancelled','error'].includes(job.phase);
+  return `<section class="catalog-growth panel" data-expansion-panel aria-labelledby="catalog-growth-title">
+    <div><p class="eyebrow">Откройте что-то новое</p><h2 id="catalog-growth-title">Больше фильмов и постеров</h2>
+    <p>Пополните общий каталог. Фильмы и постеры сохранятся на компьютере с Tonight и появятся на всех подключённых устройствах.</p></div>
+    <div class="catalog-growth-actions"><div class="catalog-growth-count" role="group" aria-label="Сколько новых фильмов добавить">${[20,50,100].map(n=>`<button class="button ${count===n?'':'secondary'}" data-expand-count="${n}" aria-pressed="${count===n}" ${busy?'disabled':''}>${n} фильмов</button>`).join('')}</div>
+    <button class="button large" data-expand-start ${busy || !job?.available?'disabled':''}>${busy?'Загружаем фильмы…':`＋ Добавить ${count} фильмов и постеры`}</button>
+    ${busy?'<button class="button ghost" data-expand-cancel>Остановить загрузку</button>':''}</div>
+    <div class="catalog-growth-status" role="status" aria-live="polite">${busy || result ? `<p>${esc(job.message)}</p><p>Добавлено фильмов: <strong>${job.added}</strong>${busy?` из ${job.target}`:''} · Постеров: <strong>${job.posters}</strong></p>${busy?`<progress value="${job.added}" max="${job.target}" aria-label="Добавление новых фильмов"></progress>`:''}${job.image_errors?`<p class="hint">Не удалось получить постеры: ${job.image_errors}. Повторная загрузка попробует добавить недостающие.</p>`:''}` : `<p class="hint">${job ? (job.available?'Уже добавленные фильмы пропускаем. Ваши оценки и история сохранятся.':'Для загрузки установите актуальную сборку Tonight.'):'Проверяем возможность загрузки…'}</p>`}</div>
+    <p class="hint">${isRemoteClient()?'Можно закрыть телефон — компьютер продолжит загрузку.':'Во время загрузки можно продолжать выбирать фильм.'}</p>
+  </section>`;
+}
+
+function paintExpansion() {
+  const panel = root.querySelector('[data-expansion-panel]');
+  if (!panel) return;
+  const template = document.createElement('template');
+  template.innerHTML = catalogExpansionCard();
+  panel.replaceWith(template.content);
+  bindExpansion();
+}
+
+async function refreshExpansion() {
+  if (state.expansionPending || (isRemoteClient() && !state.accessCode)) return;
+  clearTimeout(state.expansionTimer);
+  state.expansionPending = true;
+  try {
+    const wasRunning = state.expansion?.phase === 'running';
+    state.expansion = await api('/api/catalog/expand');
+    if (wasRunning && state.expansion.phase !== 'running') {
+      state.personalAt = 0; state.personalRevision++;
+      if (state.view === 'home' && state.user) refreshPersonal();
+    }
+    paintExpansion();
+  } catch (_) {
+    if (!state.expansion) state.expansion = {available:false, phase:'idle'};
+    paintExpansion();
+  } finally {
+    state.expansionPending = false;
+    state.expansionTimer = setTimeout(refreshExpansion, state.expansion?.phase === 'running' ? 1500 : 10000);
+  }
+}
+
+function bindExpansion() {
+  root.querySelectorAll('[data-expand-count]').forEach(button=>button.addEventListener('click',()=>{
+    state.expansionCount = Number(button.dataset.expandCount); paintExpansion();
+  }));
+  root.querySelector('[data-expand-start]')?.addEventListener('click', async event=>{
+    event.currentTarget.disabled = true;
+    try {
+      state.expansion = await api('/api/catalog/expand', {method:'POST', headers:{'X-Tonight-Update':'1'}, body:JSON.stringify({count:state.expansionCount})});
+      paintExpansion(); refreshExpansion();
+    } catch (error) { toast(error.message); refreshExpansion(); }
+  });
+  root.querySelector('[data-expand-cancel]')?.addEventListener('click', async event=>{
+    event.currentTarget.disabled = true;
+    try {
+      state.expansion = await api('/api/catalog/expand/cancel', {method:'POST', headers:{'X-Tonight-Update':'1'}});
+      paintExpansion();
+    } catch (error) { toast(error.message); }
+  });
+}
+
 function renderHome() {
   if (!state.user) {
     const accessCode = isRemoteClient() ? `<div class="panel" style="margin-bottom:1rem"><label for="access-code"><strong>Код с экрана Tonight</strong></label><input id="access-code" data-access-code inputmode="numeric" autocomplete="one-time-code" maxlength="6" value="${esc(state.accessCode)}" placeholder="6 цифр"><p class="hint">Введите код с экрана компьютера, затем выберите себя.</p></div>` : '';
-    return shell(`<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">Домашний кинозал для двоих</p><h1>Tonight <em>🍿</em></h1><p class="lede">Что смотрим сегодня?</p></div>
+    return shell(`${catalogExpansionCard()}<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">Домашний кинозал для двоих</p><h1>Tonight <em>🍿</em></h1><p class="lede">Что смотрим сегодня?</p></div>
       ${accessCode}
       <div class="people-grid">
         <button class="person-card" data-user="lera" style="--glow:#ff667c"><span class="person-emoji">🍿</span><span class="person-name">Первый зритель</span><span class="person-status">Это я</span></button>
@@ -230,7 +298,7 @@ function renderHome() {
   else if (s?.status === 'selected') { title = 'Фильм на сегодня выбран'; cta = 'Показать выбор'; }
   else if (s?.participants?.[state.user]?.ready) { title = `Готово, ${names[state.user]}!`; cta = 'Вернуться к ожиданию'; }
   else if (s?.participants?.[state.user]?.energy) { title = 'Продолжим с того же места?'; cta = 'Продолжить выбор'; }
-  return shell(`${tonightEntry()}<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">${esc(s?.title || 'Сегодня')}</p><h1>${title}</h1><p class="lede">Выберите настроение и отметьте знакомые фильмы — дальше ищем вариант, который понравится обоим.</p></div>
+  return shell(`${catalogExpansionCard()}${tonightEntry()}<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">${esc(s?.title || 'Сегодня')}</p><h1>${title}</h1><p class="lede">Выберите настроение и отметьте знакомые фильмы — дальше ищем вариант, который понравится обоим.</p></div>
     <div class="panel"><div class="presence" style="margin-bottom:1.5rem">${participantLine('lera')}${participantLine('nikita')}</div><button class="button large" data-action="continue-session">${cta}</button>${s?.status === 'choosing' && !s?.participants?.[state.user]?.energy ? '<button class="button ghost" data-view="quick">⚡ Быстрый вечер</button>' : ''}<p class="hint">${esc(catalogUpdatedText())} · тренды, популярное и классика</p></div>${inviteCard()}
   </section>${personalSection()}`);
 }
@@ -544,6 +612,8 @@ function refreshWatchlistResults() {
 }
 
 function bindCommon() {
+  bindExpansion();
+  if (!state.expansion && !state.expansionPending && (!isRemoteClient() || state.accessCode)) refreshExpansion();
   bindTonight();
   root.querySelectorAll('[data-action="select-personal"]').forEach(el => el.addEventListener('click', () => selectSearchResult(el.dataset.movieId)));
   root.querySelector('[data-action="retry-personal"]')?.addEventListener('click', refreshPersonal);

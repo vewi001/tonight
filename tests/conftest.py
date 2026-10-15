@@ -38,4 +38,14 @@ def no_live_update_requests(monkeypatch):
     # Tests never query a live GitHub release or start a real update job.
     import backend.auto_update as auto
     monkeypatch.setattr(auto, "fetch_latest_update", lambda version: None)
+    # A deployed mirror must not leak through a real lifespan background check
+    # into unrelated downloader mocks. Mirror tests still exercise the actual
+    # refresh function with their own explicit mock clients.
+    import backend.download_sources as sources
+    real_refresh = sources.refresh_public_mirror
+    def refresh_mock_clients_only(*, client=None):
+        if client is not None:
+            return real_refresh(client=client)
+    monkeypatch.setattr(sources, 'refresh_public_mirror', refresh_mock_clients_only)
+    monkeypatch.setattr(sources, '_public_mirror', {})
 

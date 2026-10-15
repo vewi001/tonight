@@ -344,3 +344,11 @@ details[open]>summary .description-collapse { display:inline; }
 .tonight-year-picker {margin-top:1rem;padding:1rem;border:1px solid var(--line);border-radius:1rem;}
 .tonight-year-picker .footer-actions {justify-content:space-between;align-items:center;margin:0 0 1rem;}
 .tonight-years .button {white-space:normal;min-width:0;padding:.8rem .5rem;}
+/* Main-screen catalog additions; usable on a phone as well as the host. */
+.catalog-growth { border: 1px solid #b96c43; background: linear-gradient(120deg, #34201fe8, #191321f2); margin: 1.2rem 0 2rem; padding: clamp(1.2rem, 3vw, 2rem); }
+.catalog-growth h2 { margin: .25rem 0 .7rem; font-size: clamp(1.4rem, 3vw, 2rem); }
+.catalog-growth-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .8rem; margin-top: 1rem; }
+.catalog-growth-count { display: flex; gap: .4rem; flex-wrap: wrap; }
+.catalog-growth-status progress { display: block; width: 100%; height: .8rem; accent-color: #ff9667; }
+.catalog-growth-status p { margin: .7rem 0; }
+@media (max-width: 600px) { .catalog-growth-actions > .large { width: 100%; white-space: normal; } .catalog-growth-count { width: 100%; } .catalog-growth-count > button { flex: 1; padding: .7rem .4rem; overflow-wrap: normal; } }
