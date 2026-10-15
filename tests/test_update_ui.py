@@ -28,6 +28,10 @@ assert(vm.runInContext('updateControls(true)',sandbox).includes('Провери�
 vm.runInContext(`state.update.phase='downloading'; state.update.download_bytes=524288`,sandbox);
 html=vm.runInContext('updateControls()',sandbox);
 assert(html.includes('50%') && html.includes('Загрузка обновления'));
+assert(html.includes('0.5 / 1.0 МБ'));
+vm.runInContext(`state.update.phase='error'; state.update.can_resume=true`,sandbox);
+assert(vm.runInContext('updateControls(true)',sandbox).includes('Продолжить загрузку'));
+vm.runInContext(`state.update.phase='downloading'`,sandbox);
 sandbox.location.hostname='192.168.1.10';
 assert.equal(vm.runInContext('updateControls(true)',sandbox),'');
 assert.equal(vm.runInContext('updateDialog()',sandbox),'');

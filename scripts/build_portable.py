@@ -29,7 +29,9 @@ Tonight Mode: настроение, время, компания и фильтр
 
 В разделе «Каталог» на основном компьютере доступны отдельные действия:
 «Обновить каталог» — добавить карточки и недостающие медиа без перезапуска;
-«Обновить приложение» — скачать программу и перезапустить Tonight.
+«Обновить приложение» — скачать только программу и перезапустить Tonight.
+Каталог и изображения повторно не скачиваются. При обрыве обновления
+приложения нажмите «Продолжить загрузку»: сохранённая часть используется снова.
 Пакеты каталога проверяются на совместимость, размер и SHA-256.
 У пользователей нет токена автора; свой TMDB-токен нужен только для
 самостоятельного получения новых данных напрямую из TMDB.
@@ -63,9 +65,9 @@ def new_staging_directory(root: Path) -> Path:
 
 
 def update_payload_files(output: Path) -> list[str]:
-    return ["Tonight.exe", "Обновить Tonight.exe", ".env.example", "README.txt", "PRIVACY.txt"] + sorted(
-        path.relative_to(output).as_posix() for path in (output / "catalog").rglob("*") if path.is_file()
-    )
+    # The existing catalog has its own updater; never send its media again with
+    # every program patch. The complete portable archive still includes it.
+    return ["Tonight.exe", "Обновить Tonight.exe", ".env.example", "README.txt", "PRIVACY.txt"]
 
 
 def _build(script: str, name: str, stage: Path, work: Path, *, assets: bool = False) -> None:

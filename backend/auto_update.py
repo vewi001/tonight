@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 import time
@@ -15,7 +16,7 @@ from typing import Callable
 
 import httpx
 
-from backend.release import MAX_RELEASE_BYTES, ReleaseError, read_release
+from backend.release import MAX_RELEASE_BYTES, ReleaseError, read_release, _is_link
 from backend.update_guard import acquire_update_lease, UpdateGuardError
 
 LATEST_URL = "https://api.github.com/repos/vewi001/tonight/releases/latest"
@@ -139,53 +140,143 @@ def _download_url_allowed(url: str) -> bool:
             parts.port in {None, 443} and not parts.username and not parts.password)
 
 
+class UpdateDownloadInterrupted(UpdateError):
+    def __init__(self, received: int, total: int):
+        self.received, self.total = received, total
+        super().__init__('Загрузка прервалась. Скачанная часть сохранена — можно продолжить.')
+
+
+def _partial_update_bytes(update: AvailableUpdate | None, destination: Path) -> int:
+    if update is None or not re.fullmatch('[a-f0-9]{64}', update.sha256):
+        return 0
+    path = destination / (update.sha256 + '.part')
+    try:
+        if any(_is_link(p) for p in (path, destination, *destination.parents)):
+            return 0
+        if path.is_file() and path.stat().st_nlink == 1:
+            return min(path.stat().st_size, update.size)
+    except OSError:
+        pass
+    return 0
+
+
+def _verify_app_package(path: Path, update: AvailableUpdate) -> None:
+    with path.open('rb') as source:
+        digest = hashlib.file_digest(source, 'sha256').hexdigest()
+    if path.stat().st_size != update.size or digest != update.sha256:
+        raise UpdateError('Скачанный файл не прошёл проверку. Повторите загрузку.')
+    release = read_release(path)
+    if release.version != update.version or 'Tonight.exe' not in release.files:
+        raise UpdateError('Содержимое пакета не соответствует версии Tonight.')
+    with zipfile.ZipFile(path) as bundle:
+        if bundle.testzip() is not None:
+            raise UpdateError('Архив обновления повреждён. Повторите загрузку.')
+
+
+def _transfer_app_update(session, update, partial, progress):
+    # Start every attempt at the stable release URL, not an expired CDN link.
+    offset = partial.stat().st_size
+    url = update.url
+    headers = {'User-Agent': 'Tonight-updater', 'Accept-Encoding': 'identity'}
+    if offset:
+        headers['Range'] = f'bytes={offset}-'
+    for _ in range(6):
+        if not _download_url_allowed(url):
+            raise UpdateError('GitHub направил загрузку по неожиданному адресу.')
+        with session.stream('GET', url, headers=headers, follow_redirects=False) as response:
+            if response.status_code in {301, 302, 303, 307, 308}:
+                location = response.headers.get('location')
+                if not location:
+                    raise UpdateError('GitHub не указал адрес загрузки.')
+                url = urljoin(url, location)
+                continue
+            if response.status_code in {408, 429, 500, 502, 503, 504}:
+                raise httpx.ReadError('Temporary app download response')
+            response.raise_for_status()
+            if response.status_code not in {200, 206} or response.headers.get('content-encoding', 'identity').lower() != 'identity':
+                raise UpdateError('Неправильный ответ сервера обновлений.')
+            if response.status_code == 206:
+                match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)', response.headers.get('content-range', ''))
+                if not offset or match is None or tuple(map(int, match.groups())) != (offset, update.size - 1, update.size):
+                    raise UpdateError('Сервер вернул неправильное продолжение загрузки.')
+                mode, total = 'ab', offset
+            else:
+                # A server may ignore Range. Restart instead of appending a full ZIP.
+                mode, total = 'wb', 0
+            length = response.headers.get('content-length')
+            if length is not None and (not length.isascii() or not length.isdigit() or int(length) != update.size - total):
+                raise UpdateError('Размер ответа не совпал с пакетом обновления.')
+            with partial.open(mode) as output:
+                if progress:
+                    progress(total, update.size)
+                try:
+                    for chunk in response.iter_bytes():
+                        total += len(chunk)
+                        if total > update.size:
+                            raise UpdateError('Размер скачанного обновления не совпал.')
+                        output.write(chunk)
+                        if progress:
+                            progress(total, update.size)
+                finally:
+                    output.flush()
+                    os.fsync(output.fileno())
+            if total != update.size:
+                raise httpx.ReadError('Incomplete app download')
+            return
+    raise UpdateError('Не удалось найти файл обновления на GitHub.')
+
+
 def download_update(update: AvailableUpdate, destination: Path, *, client: httpx.Client | None = None,
                     progress: Callable[[int, int], None] | None = None) -> Path:
-    """Download a complete, validated package; never install from a partial file."""
-    destination.mkdir(parents=True, exist_ok=True)
-    target = destination / update.name
-    partial = destination / (update.name + ".part")
+    """Retain interrupted transfers; publish only a fully verified app package."""
+    partial, retain = None, False
     try:
+        select_app_manifest({'format_version': 1, 'app_version': update.version, 'archive_url': update.url,
+                             'size_bytes': update.size, 'sha256': update.sha256}, '0.0.0')
+        if update.name != f'Tonight-update-{update.version}.zip':
+            raise UpdateError('Неправильное имя пакета обновления.')
+        if any(_is_link(path) for path in (destination, *destination.parents)):
+            raise UpdateError('Папка обновлений не может быть ссылкой.')
+        destination.mkdir(parents=True, exist_ok=True)
+        target, candidate = destination / update.name, destination / (update.sha256 + '.part')
+        for path in (target, candidate):
+            if _is_link(path) or (path.exists() and (not path.is_file() or path.stat().st_nlink != 1)):
+                raise UpdateError('Небезопасный файл загрузки.')
+        if target.exists():
+            _verify_app_package(target, update)
+            if progress:
+                progress(update.size, update.size)
+            return target
+        partial = candidate
+        if not partial.exists():
+            with partial.open('xb'):
+                pass
+        if partial.stat().st_size > update.size:
+            raise UpdateError('Сохранённая загрузка больше ожидаемого пакета.')
+        if progress:
+            progress(partial.stat().st_size, update.size)
         with nullcontext(client) if client is not None else _client() as session:
-            url = update.url
-            for _ in range(6):
-                if not _download_url_allowed(url):
-                    raise UpdateError("GitHub направил загрузку по неожиданному адресу.")
-                with session.stream("GET", url, headers={"User-Agent": "Tonight-updater", "Accept-Encoding": "identity"},
-                                    follow_redirects=False) as response:
-                    if response.status_code in {301, 302, 303, 307, 308}:
-                        location = response.headers.get("location")
-                        if not location:
-                            raise UpdateError("GitHub не указал адрес загрузки.")
-                        url = urljoin(url, location)
-                        continue
-                    response.raise_for_status()
-                    total = 0
-                    digest = hashlib.sha256()
-                    with partial.open("wb") as output:
-                        for chunk in response.iter_bytes(64 * 1024):
-                            total += len(chunk)
-                            if total > update.size:
-                                raise UpdateError("Размер скачанного обновления не совпал. Попробуйте снова.")
-                            digest.update(chunk)
-                            output.write(chunk)
-                            if progress:
-                                progress(total, update.size)
-                    if total != update.size or digest.hexdigest() != update.sha256:
-                        raise UpdateError("Скачанный файл не прошёл проверку. Попробуйте снова.")
-                    release = read_release(partial)
-                    if release.version != update.version or "Tonight.exe" not in release.files:
-                        raise UpdateError("Содержимое пакета не соответствует версии Tonight.")
-                    with zipfile.ZipFile(partial) as bundle:
-                        if bundle.testzip() is not None:
-                            raise UpdateError("Архив обновления повреждён. Попробуйте снова.")
-                    partial.replace(target)
-                    return target
-            raise UpdateError("Не удалось найти файл обновления на GitHub.")
-    except (httpx.HTTPError, OSError, ReleaseError, zipfile.BadZipFile, RuntimeError):
-        raise UpdateError("Не удалось скачать обновление. Текущая версия продолжит работать.") from None
+            for attempt in range(3):
+                if partial.stat().st_size == update.size:
+                    break
+                try:
+                    _transfer_app_update(session, update, partial, progress)
+                    break
+                except httpx.TransportError:
+                    if attempt == 2:
+                        retain = partial.stat().st_size > 0
+                        if retain:
+                            raise UpdateDownloadInterrupted(partial.stat().st_size, update.size) from None
+                        raise UpdateError('Не удалось скачать обновление. Попробуйте позже.') from None
+                    time.sleep(attempt + 1)
+        _verify_app_package(partial, update)
+        partial.replace(target)
+        return target
+    except (httpx.HTTPError, OSError, ReleaseError, zipfile.BadZipFile, RuntimeError) as error:
+        raise UpdateError('Не удалось скачать обновление. Текущая версия продолжит работать.') from None
     finally:
-        partial.unlink(missing_ok=True)
+        if partial is not None and not retain:
+            partial.unlink(missing_ok=True)
 
 
 class UpdateManager:
@@ -210,7 +301,8 @@ class UpdateManager:
                     "available_version": self._update.version if self._update else None,
                     "download_bytes": self._progress,
                     "total_bytes": self._update.size if self._update else None,
-                    "message": self._message, "install_supported": self.install_supported}
+                    "message": self._message, "install_supported": self.install_supported,
+                    "can_resume": bool(_partial_update_bytes(self._update, self.root / "Updates"))}
 
     def check(self, *, force: bool = False) -> dict:
         with self._lock:
@@ -229,6 +321,7 @@ class UpdateManager:
         else:
             with self._lock:
                 self._update = update
+                self._progress = _partial_update_bytes(update, self.root / "Updates")
                 self._phase = "available" if update else "current"
                 self._message = f"Доступно обновление {update.version}" if update else "У вас последняя версия Tonight"
         finally:
@@ -250,7 +343,7 @@ class UpdateManager:
                 raise UpdateError(str(error)) from None
             self._phase = "downloading"
             self._message = "Скачиваем обновление…"
-            self._progress = 0
+            self._progress = _partial_update_bytes(self._update, self.root / "Updates")
             return self._update
 
     def download_reserved(self, update: AvailableUpdate) -> Path | None:

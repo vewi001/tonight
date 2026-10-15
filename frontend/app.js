@@ -1149,11 +1149,11 @@ function updateControls(manual = false) {
   const percent = downloading && update.total_bytes ? Math.min(100, Math.floor(update.download_bytes / update.total_bytes * 100)) : 0;
   const title = offered ? `Доступно обновление ${esc(update.available_version)}` : 'Обновления Tonight';
   return `<aside class="panel update-notice" aria-label="Обновление Tonight"><h3>${title}</h3>
-    <p role="status">${esc(update?.message || 'Проверьте, появилась ли новая версия')}${downloading ? ` · ${percent}%` : ''}</p>
+    <p role="status">${esc(update?.message || 'Проверьте, появилась ли новая версия')}${downloading ? ` · ${percent}% · ${(update.download_bytes / 1048576).toFixed(1)} / ${(update.total_bytes / 1048576).toFixed(1)} МБ` : ''}</p>
     ${downloading ? `<progress aria-label="Загрузка обновления" max="100" value="${percent}"></progress>` : ''}
     ${offered ? `<p class="hint">${Math.ceil(update.total_bytes / 1024 / 1024)} МБ. После загрузки Tonight перезапустится. История и настройки сохранятся.</p>` : ''}
     ${offered && !update.install_supported ? '<p class="hint">Обновление одной кнопкой доступно в переносимой версии для Windows.</p>' : ''}
-    <div class="footer-actions">${offered ? `<button class="button" data-update-action="install" ${busy || !update.install_supported ? 'disabled' : ''}>${manual ? 'Обновить приложение' : 'Скачать и обновить'}</button>${!busy ? '<button class="button ghost" data-update-action="dismiss">Не сейчас</button>' : ''}` : ''}
+    <div class="footer-actions">${offered ? `<button class="button" data-update-action="install" ${busy || !update.install_supported ? 'disabled' : ''}>${update.can_resume ? 'Продолжить загрузку' : manual ? 'Обновить приложение' : 'Скачать и обновить'}</button>${!busy ? '<button class="button ghost" data-update-action="dismiss">Не сейчас</button>' : ''}` : ''}
     ${manual ? `<button class="button secondary" data-update-action="check" ${busy ? 'disabled' : ''}>${update?.phase === 'checking' ? 'Проверяем…' : 'Проверить обновления'}</button>` : ''}</div></aside>`;
 }
 

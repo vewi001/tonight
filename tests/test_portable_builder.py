@@ -36,9 +36,35 @@ def test_update_payload_includes_future_updater_but_never_user_data(tmp_path):
     (tmp_path / "data" / "tonight.db").write_bytes(b"personal")
     payload = update_payload_files(tmp_path)
     assert "Обновить Tonight.exe" in payload
-    assert "catalog/starter.db" in payload
+    assert "catalog/starter.db" not in payload
     assert ".env" not in payload
     assert "data/tonight.db" not in payload
+
+
+def test_small_update_preserves_installed_catalog_while_full_portable_keeps_it(tmp_path):
+    import zipfile
+    from backend.release import apply_release, create_portable_archive, create_release_archive, PORTABLE_PUBLIC_FILES
+    source, installed = tmp_path / 'source', tmp_path / 'installed'
+    source.mkdir()
+    for name in PORTABLE_PUBLIC_FILES:
+        (source / name).write_bytes(b'new program file')
+    (source / 'catalog').mkdir()
+    (source / 'catalog/tonight.db').write_bytes(b'public catalog')
+    (installed / 'catalog/posters').mkdir(parents=True)
+    (installed / 'catalog/tonight.db').write_bytes(b'existing catalog')
+    poster = installed / 'catalog/posters/keep.jpg'
+    poster.write_bytes(b'existing poster')
+    (installed / '.env').write_text('local settings')
+    archive = create_release_archive(source, tmp_path / 'update.zip', version='1.7.1', files=update_payload_files(source))
+    with zipfile.ZipFile(archive) as bundle:
+        assert not any(n.startswith('catalog/') for n in bundle.namelist())
+    apply_release(installed, archive, backup=lambda _: None)
+    assert (installed / 'catalog/tonight.db').read_bytes() == b'existing catalog'
+    assert poster.read_bytes() == b'existing poster'
+    assert (installed / '.env').read_text() == 'local settings'
+    full = create_portable_archive(source, tmp_path / 'portable.zip')
+    with zipfile.ZipFile(full) as bundle:
+        assert bundle.read('catalog/tonight.db') == b'public catalog'
 
 
 def test_portable_builder_explicitly_includes_raster_codecs(tmp_path,monkeypatch):
