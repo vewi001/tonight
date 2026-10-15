@@ -9,6 +9,24 @@
       "archive_url": "https://github.com/vewi001/tonight/releases/download/catalog-v1.1.0/Tonight-catalog-1.0.0-to-1.1.0.zip",
       "size_bytes": 11539470,
       "sha256": "761afa3dd1546bd35a868728d3c5db60947910a81a182f89ca6b03b230e062b2"
+    },
+    {
+      "base_version": "1.0.0",
+      "catalog_version": "1.2.0",
+      "min_app_version": "1.8.0",
+      "published_at": "2026-10-15T22:11:34+00:00",
+      "archive_url": "https://github.com/vewi001/tonight/releases/download/catalog-v1.2.0/Tonight-catalog-1.0.0-to-1.2.0.zip",
+      "size_bytes": 11691941,
+      "sha256": "c1a02e9a452bcb4c766ec1f3454c2996924dbfabae6b1d8e3d207af4bcb5a280"
+    },
+    {
+      "base_version": "1.1.0",
+      "catalog_version": "1.2.0",
+      "min_app_version": "1.8.0",
+      "published_at": "2026-10-15T22:11:34+00:00",
+      "archive_url": "https://github.com/vewi001/tonight/releases/download/catalog-v1.2.0/Tonight-catalog-1.1.0-to-1.2.0.zip",
+      "size_bytes": 256646,
+      "sha256": "1ee3218c4ebc12149113c00861bf1d52371cc8613645989e7830288ceb6564b7"
     }
   ]
 }

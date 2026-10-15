@@ -1,9 +1,9 @@
 {
   "format_version": 1,
-  "catalog_version": "1.1.0",
-  "min_app_version": "1.6.6",
-  "archive_url": "https://github.com/vewi001/tonight/releases/download/catalog-v1.1.0/Tonight-catalog-1.1.0.zip",
-  "size_bytes": 325680905,
-  "sha256": "8ff05e7e1c9057edb1d96a0f441a16a7a6d0dd14f2920fa506369a49b0cd3e15",
-  "published_at": "2026-10-13T21:06:19Z"
+  "catalog_version": "1.2.0",
+  "min_app_version": "1.6.8",
+  "archive_url": "https://github.com/vewi001/tonight/releases/download/catalog-v1.2.0/Tonight-catalog-1.2.0.zip",
+  "size_bytes": 326190920,
+  "sha256": "4667050bece1a33b932ed41ac4e98c9999424970ee52eedc3e70a91450c48c80",
+  "published_at": "2026-10-15T22:11:34+00:00"
 }

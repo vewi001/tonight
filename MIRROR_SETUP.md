@@ -31,13 +31,19 @@ Tonight-mirror/
   catalog-v1.1.0/
     Tonight-catalog-1.1.0.zip
     Tonight-catalog-1.0.0-to-1.1.0.zip
+  catalog-v1.2.0/
+    Tonight-catalog-1.2.0.zip
+    Tonight-catalog-1.1.0-to-1.2.0.zip
+    Tonight-catalog-1.0.0-to-1.2.0.zip
   SHA256SUMS.txt
   README.txt
 ```
 
 ## Подключение в приложении
 
-Публичное зеркало подключено; файлы проверены по размеру и SHA-256:
+Публичное зеркало подключено; исходные четыре архива проверены по размеру и
+SHA-256. При каждом выпуске добавляйте новую папку релиза в ту же публичную
+папку Диска. Пока новых архивов там нет, Tonight берёт их с GitHub:
 
 ```json
 {"format_version":1,"kind":"yandex-disk","url":"https://disk.yandex.ru/d/fA042rBy8NJ1aA"}
