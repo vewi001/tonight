@@ -1,7 +1,7 @@
 {
   "format_version": 1,
-  "app_version": "1.7.1",
-  "archive_url": "https://github.com/vewi001/tonight/releases/download/v1.7.1/Tonight-update-1.7.1.zip",
-  "size_bytes": 61516026,
-  "sha256": "4b660be389f16399dddbc3077ae2991980fbf43a5e5fcf56326c246c3d1003a0"
+  "app_version": "1.8.0",
+  "archive_url": "https://github.com/vewi001/tonight/releases/download/v1.8.0/Tonight-update-1.8.0.zip",
+  "size_bytes": 61531087,
+  "sha256": "cf4f1dd80638188dfabfbfa99f0651cedc25b5923e221e93da30b85a42ec5744"
 }
