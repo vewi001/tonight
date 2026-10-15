@@ -25,9 +25,9 @@ S3 и отдельный сервер не нужны. Для зеркала п�
 
 ```text
 Tonight-mirror/
-  v1.8.0/
-    Tonight-update-1.8.0.zip
-    Tonight-portable-1.8.0.zip
+  v1.9.0/
+    Tonight-update-1.9.0.zip
+    Tonight-portable-1.9.0.zip
   catalog-v1.1.0/
     Tonight-catalog-1.1.0.zip
     Tonight-catalog-1.0.0-to-1.1.0.zip
