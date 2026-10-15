@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import shutil
+import json
+from datetime import datetime, timezone
 import sqlite3
 from pathlib import Path
 
@@ -78,11 +80,25 @@ def stage_catalog_bundle(source_data: Path, destination: Path) -> dict[str, int]
     source_data = source_data.resolve()
     source_database = source_data / "tonight.db"
     build_catalog_seed(source_database, destination / "tonight.db")
+    metadata = source_data / 'bundle.json'
+    if metadata.is_file():
+        version = _bundle_version(metadata)
+        (destination / 'bundle.json').write_text(json.dumps({'format_version':1,'catalog_version':version})+'\n',encoding='utf-8')
     posters = _copy_missing_media(source_data / "posters", destination / "posters")
     backdrops = _copy_missing_media(source_data / "backdrops", destination / "backdrops")
     with sqlite3.connect(destination / "tonight.db") as db:
         movies = db.execute("SELECT COUNT(*) FROM movies").fetchone()[0]
     return {"movies": movies, "media": posters + backdrops}
+
+
+def _bundle_version(path):
+    from backend.catalog_package import _version
+    if path.stat().st_size > 4096:
+        raise ValueError('Catalog bundle metadata too large')
+    value = json.loads(path.read_text(encoding='utf-8'))
+    if set(value) != {'format_version','catalog_version'} or type(value['format_version']) is not int or value['format_version'] != 1:
+        raise ValueError('Invalid catalog bundle metadata')
+    return _version(value['catalog_version'])
 
 
 def bootstrap_catalog(root: Path, *, database: Path | None = None) -> dict[str, int]:
@@ -105,6 +121,7 @@ def bootstrap_catalog(root: Path, *, database: Path | None = None) -> dict[str, 
     mutable = [column for column in columns if column != "id"]
     assignments = ",".join(f"{column}=COALESCE(movies.{column},excluded.{column})" for column in mutable)
     with connect(database) as target:
+        fresh = target.execute('SELECT COUNT(*) FROM movies').fetchone()[0] == 0
         for row in rows:
             values = [None if column in {"poster_path", "backdrop_path"} else row[column] for column in columns]
             target.execute(
@@ -112,6 +129,16 @@ def bootstrap_catalog(root: Path, *, database: Path | None = None) -> dict[str, 
                 f"ON CONFLICT(id) DO UPDATE SET {assignments}",
                 values,
             )
+        metadata = root / 'catalog/bundle.json'
+        if fresh and metadata.is_file():
+            from backend.catalog_database import _normalize
+            from backend.catalog_merge_policy import EDITABLE_FIELDS
+            target.execute('CREATE TABLE IF NOT EXISTS catalog_field_baselines (movie_id TEXT PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE, fields TEXT NOT NULL)')
+            for row in rows:
+                baseline = {key:value for key,value in _normalize(row).items() if key in EDITABLE_FIELDS and value is not None}
+                target.execute('INSERT INTO catalog_field_baselines(movie_id,fields) VALUES(?,?)', (row['id'],json.dumps(baseline,ensure_ascii=False)))
+            target.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES('catalog_version',?)", (_bundle_version(metadata),))
+            target.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES('catalog_updated_at',?)", (datetime.now(timezone.utc).isoformat(timespec='seconds'),))
     media = _copy_missing_media(root / "catalog" / "posters", root / "data" / "posters")
     media += _copy_missing_media(root / "catalog" / "backdrops", root / "data" / "backdrops")
     return {"movies": len(rows), "media": media}

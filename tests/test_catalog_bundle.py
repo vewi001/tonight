@@ -8,6 +8,29 @@ from backend.catalog_bundle import bootstrap_catalog, build_catalog_seed, stage_
 from backend.database.db import connect, initialize
 
 
+def test_fresh_versioned_bundle_records_baseline_but_never_labels_legacy_data(tmp_path):
+    import json
+    source = tmp_path / 'source'
+    initialize(source / 'tonight.db')
+    _movie(source / 'tonight.db', 'catalog-film')
+    (source / 'bundle.json').write_text(json.dumps({'format_version': 1, 'catalog_version': '1.1.0'}))
+    for existing in (False, True):
+        root = tmp_path / str(existing)
+        stage_catalog_bundle(source, root / 'catalog')
+        if existing:
+            initialize(root / 'data/tonight.db')
+            _movie(root / 'data/tonight.db', 'legacy-film')
+        bootstrap_catalog(root)
+        with connect(root / 'data/tonight.db') as db:
+            version = db.execute("SELECT value FROM app_meta WHERE key='catalog_version'").fetchone()
+            if existing:
+                assert version is None
+            else:
+                assert version[0] == '1.1.0'
+                baseline = json.loads(db.execute("SELECT fields FROM catalog_field_baselines WHERE movie_id='catalog-film'").fetchone()[0])
+                assert baseline['title'] == 'Каталожный фильм'
+
+
 def _movie(database: Path, movie_id: str, *, trailer: str | None = None) -> None:
     with connect(database) as db:
         db.execute(

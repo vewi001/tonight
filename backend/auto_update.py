@@ -17,6 +17,7 @@ from typing import Callable
 import httpx
 
 from backend.release import MAX_RELEASE_BYTES, ReleaseError, read_release, _is_link
+from backend.download_sources import download_sources, mirror_url_allowed
 from backend.update_guard import acquire_update_lease, UpdateGuardError
 
 LATEST_URL = "https://api.github.com/repos/vewi001/tonight/releases/latest"
@@ -136,7 +137,7 @@ def fetch_latest_update(current_version: str, *, client: httpx.Client | None = N
 
 def _download_url_allowed(url: str) -> bool:
     parts = urlsplit(url)
-    return (parts.scheme == "https" and parts.hostname in DOWNLOAD_HOSTS and
+    return (parts.scheme == "https" and (parts.hostname in DOWNLOAD_HOSTS or mirror_url_allowed(url)) and
             parts.port in {None, 443} and not parts.username and not parts.password)
 
 
@@ -173,10 +174,10 @@ def _verify_app_package(path: Path, update: AvailableUpdate) -> None:
             raise UpdateError('Архив обновления повреждён. Повторите загрузку.')
 
 
-def _transfer_app_update(session, update, partial, progress):
+def _transfer_app_update(session, update, partial, progress, origin=None):
     # Start every attempt at the stable release URL, not an expired CDN link.
     offset = partial.stat().st_size
-    url = update.url
+    url = origin or update.url
     headers = {'User-Agent': 'Tonight-updater', 'Accept-Encoding': 'identity'}
     if offset:
         headers['Range'] = f'bytes={offset}-'
@@ -256,19 +257,31 @@ def download_update(update: AvailableUpdate, destination: Path, *, client: httpx
         if progress:
             progress(partial.stat().st_size, update.size)
         with nullcontext(client) if client is not None else _client() as session:
-            for attempt in range(3):
-                if partial.stat().st_size == update.size:
+            sources = download_sources(update.url, client=session)
+            complete = partial.stat().st_size == update.size
+            for source_index, source in enumerate(sources):
+                for attempt in range(3):
+                    if complete:
+                        break
+                    try:
+                        _transfer_app_update(session, update, partial, progress, origin=source)
+                        complete = True
+                        break
+                    except (httpx.TransportError, httpx.HTTPStatusError) as error:
+                        if isinstance(error,httpx.HTTPStatusError):
+                            if source_index + 1 < len(sources):
+                                break
+                            raise
+                        if attempt == 2:
+                            if source_index + 1 < len(sources):
+                                break
+                            retain = partial.stat().st_size > 0
+                            if retain:
+                                raise UpdateDownloadInterrupted(partial.stat().st_size, update.size) from None
+                            raise UpdateError('Не удалось скачать обновление. Попробуйте позже.') from None
+                        time.sleep(attempt + 1)
+                if complete:
                     break
-                try:
-                    _transfer_app_update(session, update, partial, progress)
-                    break
-                except httpx.TransportError:
-                    if attempt == 2:
-                        retain = partial.stat().st_size > 0
-                        if retain:
-                            raise UpdateDownloadInterrupted(partial.stat().st_size, update.size) from None
-                        raise UpdateError('Не удалось скачать обновление. Попробуйте позже.') from None
-                    time.sleep(attempt + 1)
         _verify_app_package(partial, update)
         partial.replace(target)
         return target

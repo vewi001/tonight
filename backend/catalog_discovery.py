@@ -12,6 +12,7 @@ from backend.auto_update import AvailableUpdate, DIGEST, DOWNLOAD_PREFIX, HEADER
 from backend.catalog_package import CatalogPackageError, _version, _date, _unique_object
 from backend.release import MAX_RELEASE_BYTES
 
+DELTA_MANIFEST_URL = 'https://raw.githubusercontent.com/vewi001/tonight/main/catalog/deltas.json'
 MANIFEST_URL = 'https://raw.githubusercontent.com/vewi001/tonight/main/catalog/latest.json'
 MAX_MANIFEST_BYTES = 16 * 1024
 
@@ -20,6 +21,7 @@ MAX_MANIFEST_BYTES = 16 * 1024
 class CatalogOffer(AvailableUpdate):
     min_app_version: str
     published_at: str
+    base_version: str | None = None
 
 
 def select_catalog_manifest(payload, current_catalog_version):
@@ -151,3 +153,65 @@ def fetch_catalog_releases(current_catalog_version: str | None, *, client: httpx
         if isinstance(exc,UpdateError):
             raise
         raise UpdateError('Не удалось проверить каталог. Можно продолжать вечер и попробовать позже.') from None
+
+
+def validate_catalog_offer(update):
+    """Validate both legacy full offers and version-pinned delta offers."""
+    base = getattr(update, 'base_version', None)
+    if base is None:
+        if getattr(update, 'min_app_version', None) is not None:
+            return select_catalog_manifest(dict(format_version=1, catalog_version=update.version,
+                min_app_version=update.min_app_version, published_at=update.published_at,
+                archive_url=update.url, size_bytes=update.size, sha256=update.sha256), None)
+        return select_catalog_update([{'tag_name':'catalog-v'+update.version,'assets':[{
+            'name':update.name,'size':update.size,'digest':'sha256:'+update.sha256,
+            'browser_download_url':update.url}]}], None)
+    base, version = _version(base), _version(update.version)
+    name = f'Tonight-catalog-{base}-to-{version}.zip'
+    expected = f'{DOWNLOAD_PREFIX}catalog-v{version}/{name}'
+    if (_numbers(base) >= _numbers(version) or update.name != name or update.url != expected
+            or type(update.size) is not int or not 0 < update.size <= MAX_RELEASE_BYTES
+            or not isinstance(update.sha256,str) or not re.fullmatch('[a-f0-9]{64}', update.sha256)
+            or _numbers(update.min_app_version) < (1,8,0)):
+        raise UpdateError('Пакет изменений каталога не прошёл проверку.')
+    _date(update.published_at)
+    return update
+
+
+def select_catalog_delta(payload, full, current):
+    if not isinstance(payload,dict) or set(payload) != {'format_version','deltas'} or type(payload['format_version']) is not int or payload['format_version'] != 1 or not isinstance(payload['deltas'],list) or len(payload['deltas']) > 100:
+        raise UpdateError('Некорректный список пакетов изменений каталога.')
+    candidates, seen = [], set()
+    for item in payload['deltas']:
+        fields = {'base_version','catalog_version','min_app_version','published_at','archive_url','size_bytes','sha256'}
+        if not isinstance(item,dict) or set(item) != fields:
+            raise UpdateError('Некорректное описание пакета изменений каталога.')
+        offer = CatalogOffer(item['catalog_version'], f"Tonight-catalog-{item['base_version']}-to-{item['catalog_version']}.zip",
+                             item['size_bytes'], item['sha256'], item['archive_url'], item['min_app_version'], item['published_at'], item['base_version'])
+        validate_catalog_offer(offer)
+        key = (offer.base_version, offer.version)
+        if key in seen:
+            raise UpdateError('Пакет изменений каталога повторяется.')
+        seen.add(key)
+        if current is not None and offer.base_version == current and offer.version == full.version and offer.size < full.size:
+            candidates.append(offer)
+    return candidates[0] if candidates else full
+
+
+def fetch_catalog_delta(full, current, *, client=None):
+    if full is None or current is None:
+        return full
+    # A missing or unavailable optional index keeps full delivery available.
+    try:
+        with nullcontext(client) if client is not None else _client() as session:
+            with session.stream('GET', DELTA_MANIFEST_URL, headers={'User-Agent':'Tonight-updater'}, follow_redirects=False) as response:
+                if response.status_code != 200:
+                    return full
+                body = bytearray()
+                for chunk in response.iter_bytes(1024):
+                    body.extend(chunk)
+                    if len(body) > 64*1024:
+                        raise UpdateError('Описание пакетов изменений слишком большое.')
+        return select_catalog_delta(json.loads(body, object_pairs_hook=_unique_object), full, current)
+    except httpx.HTTPError:
+        return full

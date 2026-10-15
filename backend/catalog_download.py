@@ -12,6 +12,7 @@ from urllib.parse import urljoin
 
 import httpx
 
+from backend.download_sources import download_sources
 from backend.auto_update import AvailableUpdate, DOWNLOAD_PREFIX, UpdateError, _client, _download_url_allowed
 from backend.catalog_package import CatalogCompatibilityError, CatalogPackageError, _version, read_catalog_package
 from backend.release import MAX_RELEASE_BYTES, _is_link
@@ -39,11 +40,8 @@ class CatalogDownloadInterrupted(UpdateError):
 def _validate(update, app_version):
     version = _version(update.version)
     app = _version(app_version)
-    name = f'Tonight-catalog-{version}.zip'
-    if (update.name!=name or update.url!=f'{DOWNLOAD_PREFIX}catalog-v{version}/{name}'
-            or type(update.size) is not int or not 0<update.size<=MAX_RELEASE_BYTES
-            or not isinstance(update.sha256,str) or not re.fullmatch('[a-f0-9]{64}',update.sha256)):
-        raise UpdateError('Описание файла каталога не прошло проверку.')
+    from backend.catalog_discovery import validate_catalog_offer
+    validate_catalog_offer(update)
     minimum = getattr(update,'min_app_version',None)
     if minimum is not None and tuple(map(int,app.split('.')))<tuple(map(int,_version(minimum).split('.'))):
         raise CatalogCompatibilityUpdateError(minimum)
@@ -59,15 +57,17 @@ def _verify(path, update, app_version):
     if digest.hexdigest()!=update.sha256:
         raise CatalogIntegrityUpdateError('Каталог не прошёл проверку.')
     package = read_catalog_package(path,app_version=app_version)
+    if package.base_version != getattr(update,'base_version',None):
+        raise CatalogIntegrityUpdateError('Основа каталога не совпала с манифестом.')
     if package.version!=update.version or (getattr(update,'min_app_version',None) is not None
                                           and package.min_app_version!=update.min_app_version):
         raise CatalogIntegrityUpdateError('Описание пакета не совпало с манифестом.')
 
 
-def _transfer(session, update, partial, progress):
+def _transfer(session, update, partial, progress, origin=None):
     # Every retry starts at stable origin, not an expired signed CDN URL.
     offset = partial.stat().st_size
-    url = update.url
+    url = origin or update.url
     headers = {'User-Agent':'Tonight-updater','Accept-Encoding':'identity'}
     if offset: headers['Range'] = f'bytes={offset}-'
     for _ in range(6):
@@ -154,16 +154,29 @@ def download_catalog(update: AvailableUpdate, destination: Path, *, app_version:
             raise CatalogIntegrityUpdateError('Размер каталога не совпал.')
         if progress: progress(partial.stat().st_size,update.size)
         with nullcontext(client) if client is not None else _client() as session:
-            for attempt in range(ATTEMPTS):
-                if partial.stat().st_size==update.size: break
-                try:
-                    _transfer(session,update,partial,progress)
+            sources = download_sources(update.url, client=session)
+            complete = partial.stat().st_size == update.size
+            for source_index, source in enumerate(sources):
+                for attempt in range(ATTEMPTS):
+                    if complete:
+                        break
+                    try:
+                        _transfer(session,update,partial,progress,origin=source)
+                        complete = True
+                        break
+                    except (httpx.TransportError, httpx.HTTPStatusError) as error:
+                        if isinstance(error,httpx.HTTPStatusError):
+                            if source_index + 1 < len(sources):
+                                break
+                            raise
+                        if attempt==ATTEMPTS-1:
+                            if source_index + 1 < len(sources):
+                                break
+                            retain = True
+                            raise CatalogDownloadInterrupted(partial.stat().st_size,update.size) from None
+                        time.sleep(attempt+1)
+                if complete:
                     break
-                except httpx.TransportError:
-                    if attempt==ATTEMPTS-1:
-                        retain = True
-                        raise CatalogDownloadInterrupted(partial.stat().st_size,update.size) from None
-                    time.sleep(attempt+1)
         _verify(partial,update,app_version)
         os.link(partial,target)
         return target

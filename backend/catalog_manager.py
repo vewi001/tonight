@@ -9,7 +9,7 @@ import time
 import sqlite3
 
 from backend.auto_update import UpdateError
-from backend.catalog_discovery import fetch_catalog_update
+from backend.catalog_discovery import fetch_catalog_delta, fetch_catalog_update
 from backend.catalog_download import CatalogCompatibilityUpdateError, CatalogIntegrityUpdateError, CatalogDownloadInterrupted, download_catalog
 from backend.catalog_install import install_catalog
 from backend.catalog_package import _version
@@ -27,6 +27,7 @@ class CatalogUpdateManager:
         self._lock = threading.RLock()
         self._current = None
         self._update = None
+        self._full_update = None
         self._phase = 'idle'
         self._message = ''
         self._progress = 0
@@ -40,7 +41,8 @@ class CatalogUpdateManager:
             return {'current_version':self._current,'available_version':self._update.version if self._update else None,
                     'phase':self._phase,'download_bytes':self._progress,
                     'total_bytes':self._update.size if self._update else None,'message':self._message,
-                    'can_resume':self._can_resume}
+                    'can_resume':self._can_resume,
+                    'delivery_kind':'delta' if getattr(self._update,'base_version',None) else 'full'}
 
     def _read_current(self):
         paths(self.root,self.database)
@@ -81,6 +83,9 @@ class CatalogUpdateManager:
         try:
             current = self._read_current()
             update = fetch_catalog_update(current)
+            self._full_update = update
+            if tuple(map(int,self.app_version.split('.'))) >= (1,8,0):
+                update = fetch_catalog_delta(update, current)
             minimum = getattr(update,'min_app_version',None)
             if minimum is not None and tuple(map(int,self.app_version.split('.')))<tuple(map(int,minimum.split('.'))):
                 raise CatalogCompatibilityUpdateError(minimum)
@@ -106,7 +111,7 @@ class CatalogUpdateManager:
                 self._last_check = time.monotonic()
         return self.status()
 
-    def reserve_download(self):
+    def reserve_download(self, *, full=False):
         with self._lock:
             if self._phase in ACTIVE or self._phase=='recovery_error' or self._update is None or self._lease is not None:
                 raise UpdateError('Сначала проверьте каталог и дождитесь завершения текущей операции.')
@@ -114,6 +119,8 @@ class CatalogUpdateManager:
                 self._lease = acquire_update_lease(self.root)
             except UpdateGuardError as error:
                 raise UpdateError(str(error)) from None
+            if full and self._full_update is not None:
+                self._update = self._full_update
             self._worker_claimed = False
             self._update = replace(self._update)  # Fresh reservation identity, even on retry.
             self._phase = 'downloading'

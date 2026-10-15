@@ -64,6 +64,7 @@ class CatalogPackage:
     created_at: str
     movies: tuple[dict, ...]
     media_files: tuple[str, ...]
+    base_version: str | None = None
 
 
 def _version(value):
@@ -169,8 +170,10 @@ def read_catalog_package(archive: Path, *, app_version: str | None = None) -> Ca
                 raise CatalogPackageError('Описание каталога слишком большое')
             manifest = json.loads(bundle.read(MANIFEST),object_pairs_hook=_unique_object)
             required = {'product','kind','format','version','min_app_version','created_at','movie_count','files'}
+            if isinstance(manifest,dict) and manifest.get('format')==2:
+                required = required | {'base_version'}
             if (not isinstance(manifest,dict) or set(manifest)!=required or manifest['product']!='Tonight'
-                    or manifest['kind']!='catalog' or type(manifest['format']) is not int or manifest['format']!=1):
+                    or manifest['kind']!='catalog' or type(manifest['format']) is not int or manifest['format'] not in {1,2}):
                 raise CatalogPackageError('Пакет не предназначен для каталога Tonight')
             version, minimum = _version(manifest['version']), _version(manifest['min_app_version'])
             if app_version is not None:
@@ -178,6 +181,9 @@ def read_catalog_package(archive: Path, *, app_version: str | None = None) -> Ca
                 required_version = tuple(map(int,minimum.split('.')))
                 if current<required_version:
                     raise CatalogCompatibilityError(minimum)
+            base = _version(manifest['base_version']) if manifest['format']==2 else None
+            if base is not None and (tuple(map(int,base.split('.'))) >= tuple(map(int,version.split('.'))) or tuple(map(int,minimum.split('.'))) < (1,8,0)):
+                raise CatalogPackageError('Некорректная основа пакета изменений')
             created = _date(manifest['created_at'])
             files = manifest['files']
             if not isinstance(files,dict) or set(files)|{MANIFEST}!=set(names) or MANIFEST in files:
@@ -205,7 +211,7 @@ def read_catalog_package(archive: Path, *, app_version: str | None = None) -> Ca
                     validate_catalog_image(bundle.read(name),Path(name).suffix)
                 except CatalogMediaError:
                     raise CatalogPackageError('Изображение каталога не прошло проверку') from None
-            return CatalogPackage(version,minimum,created,movies,media)
+            return CatalogPackage(version,minimum,created,movies,media,base)
     except (OSError,KeyError,UnicodeDecodeError,json.JSONDecodeError,zipfile.BadZipFile,ReleaseError,RuntimeError):
         raise CatalogPackageError('Не удалось проверить пакет каталога') from None
 

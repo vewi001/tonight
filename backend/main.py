@@ -69,7 +69,9 @@ def set_update_shutdown(callback) -> None:
 
 
 async def _update_check_loop() -> None:
+    from backend.download_sources import refresh_public_mirror
     while True:
+        await asyncio.to_thread(refresh_public_mirror)
         await asyncio.to_thread(updates.check)
         await asyncio.sleep(6 * 3600)
 
@@ -311,10 +313,10 @@ async def _run_catalog_update(update) -> None:
 
 
 @app.post('/api/catalog/updates/install',status_code=202)
-async def install_catalog_update(request: Request) -> dict:
+async def install_catalog_update(request: Request, full: bool = False) -> dict:
     _require_update_action(request)
     try:
-        update = catalog_updates.reserve_download()
+        update = catalog_updates.reserve_download(full=full)
     except UpdateError as error:
         raise HTTPException(409,str(error)) from None
     task = asyncio.create_task(_run_catalog_update(update))

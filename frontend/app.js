@@ -472,14 +472,15 @@ function catalogPanel() {
     ['Со ссылкой на трейлер',summary.trailer_link_count],['С постером и ссылкой на трейлер',summary.poster_and_trailer_count],
     ['Версия каталога',summary.catalog_version || 'Пакет ещё не установлен'],['Последнее обновление пакетом',updated],
   ].map(([label,value]) => `<div class="setup-row"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('')}</div>` : '<p class="hint">Сводка каталога пока недоступна.</p>';
-  const percent = update.total_bytes ? Math.min(100,Math.floor((update.download_bytes || 0)/update.total_bytes*100)) : 0;
+  const percent = update.total_bytes ? Math.min(100,Math.round((update.download_bytes || 0)/update.total_bytes*1000)/10) : 0;
   return `<section class="panel"><h2>Ваш локальный каталог</h2>${rows}<p class="hint">Доступность видео не проверена: ссылка на YouTube может перестать работать. Считаем постеры, сохранённые для карточек, без запасных обложек.</p></section>
-    <section class="panel"><h2>Обновление каталога</h2><p>Новые фильмы и недостающие постеры — без TMDB-токена. История, оценки, личные правки и настройки сохранятся. Tonight не перезапустится.</p>
+    <section class="panel"><h2>Обновление каталога</h2>${update.available_version ? `<p class="hint">${update.delivery_kind==='delta'?'Только изменения: новые карточки и изображения.':'Полный пакет: подходящего набора изменений для установленной версии нет.'}</p>` : ''}<p>Новые фильмы и недостающие постеры — без TMDB-токена. История, оценки, личные правки и настройки сохранятся. Tonight не перезапустится.</p>
     <p role="status">${esc(state.catalogError || update.message || 'Проверьте, появился ли новый пакет каталога')}${update.phase === 'downloading' ? ` · ${((update.download_bytes || 0)/1000000).toFixed(1)} из ${((update.total_bytes || 0)/1000000).toFixed(1)} МБ · ${percent}%` : ''}</p>
     ${update.phase === 'downloading' ? `<progress aria-label="Загрузка каталога" max="100" value="${percent}"></progress>` : ''}
     ${update.available_version ? `<p class="hint">Каталог ${esc(update.available_version)} · ${Math.ceil((update.total_bytes || 0)/1000000)} МБ. Совместимость проверим до установки.</p>` : ''}
     <div class="footer-actions"><button class="button secondary" data-catalog-action="check" ${busy || recovery || appBusy ? 'disabled' : ''}>Проверить обновление каталога</button>
     ${update.available_version && !recovery ? `<button class="button" data-catalog-action="install" ${busy || appBusy ? 'disabled' : ''}>${update.can_resume ? 'Продолжить загрузку' : 'Обновить каталог'}</button>` : ''}
+    ${update.delivery_kind==='delta' && !recovery ? `<button class="button ghost" data-catalog-action="install-full" ${busy || appBusy ? 'disabled' : ''}>Скачать полный пакет</button>` : ''}
     ${recovery ? `<button class="button" data-catalog-action="recover" ${appBusy ? 'disabled' : ''}>Повторить восстановление</button>` : ''}</div></section>`;
 }
 
@@ -517,13 +518,14 @@ async function refreshCatalogStatus() {
 }
 
 async function catalogAction(action) {
-  if (isRemoteClient() || !['check','install','recover'].includes(action)) return;
+  const endpoint = action==='install-full' ? 'install?full=true' : action;
+  if (isRemoteClient() || !['check','install','install-full','recover'].includes(action)) return;
   clearTimeout(state.catalogTimer); ++state.catalogRequest;
   state.catalogError = '';
   state.catalog ||= {summary:null,update:{}};
-  state.catalog.update = {...state.catalog.update,phase:action === 'install' ? 'downloading' : 'checking',message:action === 'install' ? 'Скачиваем и проверяем каталог…' : 'Проверяем каталог…'};
+  state.catalog.update = {...state.catalog.update,phase:action.startsWith('install') ? 'downloading' : 'checking',message:action.startsWith('install') ? 'Скачиваем и проверяем каталог…' : 'Проверяем каталог…'};
   catalogNotice();
-  try { state.catalog.update = await api(`/api/catalog/updates/${action}`,{method:'POST',headers:{'X-Tonight-Update':'1'}}); }
+  try { state.catalog.update = await api(`/api/catalog/updates/${endpoint}`,{method:'POST',headers:{'X-Tonight-Update':'1'}}); }
   catch (error) { state.catalogError = error.message; state.catalog.update.phase = 'error'; }
   catalogNotice();
   if (!state.catalogError) await refreshCatalogStatus();
