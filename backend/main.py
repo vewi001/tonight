@@ -593,10 +593,22 @@ async def select_saved(session_id: int, movie_id: str) -> dict:
     return selected
 
 
+class ViewingContextIn(BaseModel):
+    company: Literal['solo', 'couple', 'friends', 'family'] = 'couple'
+    user_id: Literal['lera', 'nikita'] | None = None
+
+    @model_validator(mode='after')
+    def solo_viewer_required(self):
+        if self.company == 'solo' and self.user_id is None:
+            raise ValueError('Выберите зрителя для одиночного вечера')
+        return self
+
+
 @app.post("/api/sessions/{session_id}/select-catalog/{movie_id}")
-async def select_catalog(session_id: int, movie_id: str) -> dict:
+async def select_catalog(session_id: int, movie_id: str, payload: ViewingContextIn | None = None) -> dict:
     try:
-        selected = choose_catalog_movie(session_id, movie_id)
+        context = payload or ViewingContextIn()
+        selected = choose_catalog_movie(session_id, movie_id, company=context.company, user_id=context.user_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     await publish_state(session_id, "selected")
@@ -647,9 +659,18 @@ async def avoid_similar(session_id: int, payload: AvoidSimilarIn) -> dict:
     return {"session": session_state(session_id), "avoidance": avoidance}
 
 
+def _rating_context(db, history_id: int, user_id: str, *, evening: bool = False):
+    context = db.execute("SELECT s.viewing_company,s.solo_user_id FROM watch_history h JOIN sessions s ON s.id=h.session_id WHERE h.id=?", (history_id,)).fetchone()
+    if not context:
+        raise HTTPException(404, "Просмотр не найден")
+    if context['viewing_company'] == 'solo' and (context['solo_user_id'] != user_id or evening):
+        raise HTTPException(409, "Одиночный просмотр оценивает только его зритель; совместной оценки нет")
+
+
 @app.post("/api/history/{history_id}/feedback")
 async def feedback(history_id: int, payload: FeedbackIn) -> dict:
     with db_session() as db:
+        _rating_context(db, history_id, payload.user_id)
         exists = db.execute("SELECT id FROM watch_history WHERE id=?", (history_id,)).fetchone()
         if not exists:
             raise HTTPException(404, "Просмотр не найден")
@@ -663,6 +684,7 @@ async def feedback(history_id: int, payload: FeedbackIn) -> dict:
 @app.post("/api/history/{history_id}/evening-feedback")
 async def evening_feedback(history_id: int, payload: EveningFeedbackIn) -> dict:
     with db_session() as db:
+        _rating_context(db, history_id, payload.user_id, evening=True)
         exists = db.execute("SELECT id FROM watch_history WHERE id=?", (history_id,)).fetchone()
         if not exists:
             raise HTTPException(404, "Просмотр не найден")
@@ -678,8 +700,9 @@ async def history() -> dict:
     with db_session() as db:
         rows = db.execute(
             """SELECT h.id history_id,h.session_id,h.watched_at,m.*,fl.rating lera_rating,fn.rating nikita_rating,
-            el.fit lera_evening_fit,en.fit nikita_evening_fit
+            el.fit lera_evening_fit,en.fit nikita_evening_fit,s.viewing_company,s.solo_user_id
             FROM watch_history h JOIN movies m ON m.id=h.movie_id
+            JOIN sessions s ON s.id=h.session_id
             LEFT JOIN feedback fl ON fl.history_id=h.id AND fl.user_id='lera'
             LEFT JOIN feedback fn ON fn.history_id=h.id AND fn.user_id='nikita'
             LEFT JOIN evening_feedback el ON el.history_id=h.id AND el.user_id='lera'
@@ -689,7 +712,7 @@ async def history() -> dict:
     items = []
     for row in rows:
         movie = get_movie(row["id"])
-        items.append({"history_id": row["history_id"], "session_id": row["session_id"], "watched_at": row["watched_at"], "movie": movie, "ratings": {"lera": row["lera_rating"], "nikita": row["nikita_rating"]}, "evening_feedback": {"lera": None if row["lera_evening_fit"] is None else bool(row["lera_evening_fit"]), "nikita": None if row["nikita_evening_fit"] is None else bool(row["nikita_evening_fit"])} })
+        items.append({"history_id": row["history_id"], "session_id": row["session_id"], "watched_at": row["watched_at"], "movie": movie, "viewing_company": row["viewing_company"], "solo_user_id": row["solo_user_id"], "ratings": {"lera": row["lera_rating"], "nikita": row["nikita_rating"]}, "evening_feedback": {"lera": None if row["lera_evening_fit"] is None else bool(row["lera_evening_fit"]), "nikita": None if row["nikita_evening_fit"] is None else bool(row["nikita_evening_fit"])} })
     return {"items": items}
 
 

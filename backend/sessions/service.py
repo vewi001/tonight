@@ -186,7 +186,7 @@ def choose_movie(session_id: int, exclude_current: bool = False) -> dict[str, An
         selected_at = datetime.now().isoformat(timespec="seconds")
         db.execute(
             """UPDATE sessions SET selected_movie_id=?,rejected_movies=?,status='selected',
-            selected_at=?,updated_at=? WHERE id=?""",
+            selected_at=?,updated_at=?,viewing_company='couple',solo_user_id=NULL WHERE id=?""",
             (selected["id"], dumps(rejected), selected_at, selected_at, session_id),
         )
     return selected
@@ -207,7 +207,7 @@ def choose_specific_recommendation(session_id: int, movie_id: str) -> dict[str, 
             raise ValueError("movie is not an available recommendation")
         selected_at = datetime.now().isoformat(timespec="seconds")
         db.execute(
-            "UPDATE sessions SET selected_movie_id=?,status='selected',selected_at=?,updated_at=? WHERE id=?",
+            "UPDATE sessions SET selected_movie_id=?,status='selected',selected_at=?,updated_at=?,viewing_company='couple',solo_user_id=NULL WHERE id=?",
             (movie_id, selected_at, selected_at, session_id),
         )
     return movie
@@ -231,14 +231,16 @@ def choose_saved_movie(session_id: int, movie_id: str) -> dict[str, Any]:
             raise ValueError("movie is not released")
         selected_at = datetime.now().isoformat(timespec="seconds")
         db.execute(
-            "UPDATE sessions SET selected_movie_id=?,status='selected',selected_at=?,updated_at=? WHERE id=?",
+            "UPDATE sessions SET selected_movie_id=?,status='selected',selected_at=?,updated_at=?,viewing_company='couple',solo_user_id=NULL WHERE id=?",
             (movie_id, selected_at, selected_at, session_id),
         )
     return movie
 
 
-def choose_catalog_movie(session_id: int, movie_id: str) -> dict[str, Any]:
-    """Choose an existing local catalog result for the current evening."""
+def choose_catalog_movie(session_id: int, movie_id: str, *, company: str = "couple", user_id: str | None = None) -> dict[str, Any]:
+    """Choose a catalog result, retaining the actual company for history/ratings."""
+    if company not in {'solo', 'couple', 'friends', 'family'} or (company == 'solo' and user_id not in {'lera', 'nikita'}):
+        raise ValueError('Выберите зрителя для одиночного вечера')
     movie = get_movie(movie_id)
     if not movie:
         raise ValueError("movie not found")
@@ -250,8 +252,8 @@ def choose_catalog_movie(session_id: int, movie_id: str) -> dict[str, Any]:
             raise ValueError("session is not available")
         selected_at = datetime.now().isoformat(timespec="seconds")
         db.execute(
-            "UPDATE sessions SET selected_movie_id=?,status='selected',selected_at=?,updated_at=? WHERE id=?",
-            (movie_id, selected_at, selected_at, session_id),
+            "UPDATE sessions SET selected_movie_id=?,status='selected',selected_at=?,updated_at=?,viewing_company=?,solo_user_id=? WHERE id=?",
+            (movie_id, selected_at, selected_at, company, user_id if company == 'solo' else None, session_id),
         )
     return movie
 
@@ -465,6 +467,7 @@ def session_state(session_id: int, db: Any | None = None) -> dict[str, Any]:
         return {
             "id": row["id"], "date": row["session_date"], "title": row["title"], "status": row["status"],
             "participants": people, "recommendations": recommendations, "selected": selected,
+            "viewing_company": row["viewing_company"], "solo_user_id": row["solo_user_id"],
             "recommendation_context": recommendation_context,
         }
     finally:

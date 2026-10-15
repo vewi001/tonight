@@ -118,7 +118,9 @@ def personal_recommendations(user_id: str, limit: int = 6, reference_day: date |
             other = 'nikita' if user_id == 'lera' else 'lera'
             signals += taste_signals(db, other)
             rules += load_avoidance_rules(db, other)
-        watched = {row[0] for row in db.execute('SELECT movie_id FROM watch_history')}
+        watched_users = ['lera', 'nikita'] if tonight and tonight['company'] == 'couple' else [user_id]
+        watched = {row[0] for row in db.execute(
+            "SELECT h.movie_id FROM watch_history h JOIN sessions s ON s.id=h.session_id WHERE s.viewing_company!='solo' OR s.solo_user_id IN (" + ','.join('?' for _ in watched_users) + ')', watched_users)}
         marks = defaultdict(set)
         for row in db.execute('SELECT movie_id,action FROM viewer_movie_actions WHERE user_id=?', (user_id,)):
             marks[row['movie_id']].add(row['action'])

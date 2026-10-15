@@ -98,6 +98,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     rejected_movies TEXT DEFAULT '[]',
     access_code TEXT NOT NULL DEFAULT '000000',
     selected_at TEXT,
+    viewing_company TEXT NOT NULL DEFAULT 'couple',
+    solo_user_id TEXT,
     reconnect_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -254,6 +256,10 @@ def initialize(path: Path | None = None) -> None:
             db.execute("ALTER TABLE sessions ADD COLUMN selected_at TEXT")
         if "reconnect_count" not in session_columns:
             db.execute("ALTER TABLE sessions ADD COLUMN reconnect_count INTEGER NOT NULL DEFAULT 0")
+        if "viewing_company" not in session_columns:
+            db.execute("ALTER TABLE sessions ADD COLUMN viewing_company TEXT NOT NULL DEFAULT 'couple'")
+        if "solo_user_id" not in session_columns:
+            db.execute("ALTER TABLE sessions ADD COLUMN solo_user_id TEXT")
         missing_codes = db.execute("SELECT id FROM sessions WHERE access_code IS NULL OR length(access_code) != 6").fetchall()
         for row in missing_codes:
             db.execute("UPDATE sessions SET access_code=? WHERE id=?", (generate_access_code(), row["id"]))
