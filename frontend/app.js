@@ -30,7 +30,7 @@ const moods = [
 ];
 const genres = ['хоррор','романтика','комедия','драма','боевик','sci-fi','фэнтези','детектив','триллер','мультфильм','мюзикл','документальное'];
 const reactionMap = [
-  ['love','❤️','Обожаю'],['like','👍','Нравится'],['okay','🤷','Норм'],['dislike','👎','Не хочу'],['unseen','❔','Не смотрел(а)'],
+  ['love','❤️','Очень понравился'],['like','👍','Понравился'],['okay','🤷','Нормальный'],['dislike','👎','Не понравился'],['unseen','❔','Не смотрел(а)'],
 ];
 const feedbackMap = [['😍','Офигенно',5],['🙂','Хорошо',4],['😐','Нормально',3],['🙁','Не зашло',2],['💀','Ужас',1]];
 const names = { lera: 'Первый зритель', nikita: 'Второй зритель' };
@@ -124,7 +124,7 @@ function toast(message) {
 }
 
 function shell(content, { narrow = false, nav = true } = {}) {
-  const identity = state.user ? `<button class="icon-button identity-pill" data-action="switch-user" title="Сменить пользователя">${emojis[state.user]} <span>${names[state.user]}</span></button>` : '';
+  const identity = state.user ? `<button class="icon-button identity-pill" data-action="switch-user" aria-label="Сменить зрителя: ${names[state.user]}">${emojis[state.user]} <span>${names[state.user]}</span><span class="identity-change">· Сменить</span></button>` : '';
   const credits = state.setup?.tmdb_movies ? `<footer class="data-credits" aria-label="Источники данных"><a href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer"><img src="/assets/tmdb.svg" alt="TMDB"></a><span>This product uses the TMDB API but is not endorsed or certified by TMDB.</span></footer>` : '';
   return `<div class="shell">
     ${nav ? `<header class="topbar"><button class="brand" data-view="home">Tonight <span>🍿</span></button>${identity}<button class="icon-button nav-toggle" data-action="toggle-nav" aria-expanded="${!!state.navOpen}" aria-controls="main-navigation">Разделы ${state.navOpen ? '−' : '+'}</button><nav id="main-navigation" class="top-actions ${state.navOpen ? 'is-open' : ''}" aria-label="Основная навигация">
@@ -198,7 +198,7 @@ function renderSetup() {
   const o = state.setup?.ollama || {};
   return shell(`<section class="panel" style="margin-top:8vh">
     <p class="eyebrow">Первый запуск</p><h2>Добро пожаловать в Tonight 🍿</h2>
-    <p class="lede">Проверим, что всё готово для выбора фильма.</p>
+    <p class="lede">Tonight помогает двоим выбрать фильм по настроению и вкусу. Проверим, что всё готово.</p>
     <div class="setup-list">
       <div class="setup-row"><span>Каталог готов</span><strong class="ok">✓ ${state.setup?.catalog || 0} фильмов</strong></div>
       <div class="setup-row"><span>Постеры загружены</span><strong class="${state.setup?.posters ? 'ok':'warn'}">${state.setup?.posters ? `✓ ${state.setup.posters}`:'○ Постеры пока не загружены'}</strong></div>
@@ -292,7 +292,7 @@ function bindExpansion() {
 function renderHome() {
   if (!state.user) {
     const accessCode = isRemoteClient() ? `<div class="panel" style="margin-bottom:1rem"><label for="access-code"><strong>Код с экрана Tonight</strong></label><input id="access-code" data-access-code inputmode="numeric" autocomplete="one-time-code" maxlength="6" value="${esc(state.accessCode)}" placeholder="6 цифр"><p class="hint">Введите код с экрана компьютера, затем выберите себя.</p></div>` : '';
-    return shell(`<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">Выбор фильма на вечер</p><h1>Tonight <em>🍿</em></h1><p class="lede">Что смотрим сегодня?</p></div>
+    return shell(`<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">Выбор фильма для двоих</p><h1>Tonight <em>🍿</em></h1><p class="lede">Подберите фильм, который понравится обоим.</p></div>
       ${accessCode}
       <div class="people-grid">
         <button class="person-card" data-user="lera" style="--glow:#ff667c"><span class="person-emoji">🍿</span><span class="person-name">Первый зритель</span></button>
@@ -313,20 +313,20 @@ function renderHome() {
   else if (s?.participants?.[state.user]?.energy) { title = 'Продолжим с того же места?'; cta = 'Продолжить выбор'; }
   const active=s && !['choosing','completed'].includes(s.status) || s?.participants?.[state.user]?.energy;
   const job=state.expansion;
-  return shell(`${tonightEntry()}<div class="mode-grid">${rouletteEntry()}<section class="tinder-entry"><div><h2>Кино-Tinder</h2><p>Один фильм, три простых действия.</p></div><button class="button secondary" data-tinder-open>Начать подбор</button></section></div>
-    <section class="shared-entry"><h2>${active?esc(title):'Выбрать вместе'}</h2><p>Учтём настроение и реакции обоих зрителей.</p><button class="button secondary" data-action="continue-session">${active?esc(cta):'Начать совместный выбор'}</button>${!active?'<button class="button ghost" data-view="quick">Быстрый вечер</button>':''}</section>
+  return shell(`<section class="shared-entry shared-hero" aria-labelledby="shared-home-title"><p class="eyebrow">Кино для двоих</p><h1 id="shared-home-title">${active?esc(title):'Что посмотрим вместе?'}</h1><p class="lede">Каждый задаёт настроение и оценивает знакомые фильмы. Tonight предлагает варианты с учётом вас обоих.</p><button class="button large" data-action="continue-session">${active?esc(cta):'Выбрать вместе'}</button>${!active?'<div class="quick-entry"><button class="button ghost" data-view="quick">Выбрать готовый сценарий</button><p class="hint">«Устали» или «Поздно»: зададим условия вечера и перейдём к оценке знакомых фильмов.</p></div>':''}</section>
+    <section class="other-modes" aria-labelledby="other-modes-title"><h2 id="other-modes-title">Другие способы выбрать</h2><div class="mode-grid">${tonightEntry()}${rouletteEntry()}<section class="tinder-entry"><div><h3>Кино-Tinder</h3><p>Отмечайте интересные фильмы по одному — подбор будет учиться на ваших ответах.</p></div><button class="button secondary" data-tinder-open>Листать фильмы</button></section></div></section>
     ${job && ['running','error'].includes(job.phase)?`<aside class="status-card" role="status"><p>${esc(job.message || 'Загрузка каталога')}</p><button class="button secondary" data-view="library">Открыть каталог</button></aside>`:''}
     ${personalSection()}<details class="disclosure"><summary>Подключить телефон и пригласить зрителя</summary>${inviteCard()}<div class="presence">${participantLine('lera')}${participantLine('nikita')}</div></details>`);
 
 }
 
 function discoveryCard(movie, reason, action = 'select-personal') {
-  return `<article class="history-card">${poster(movie)}<h3>${esc(movie.title)}</h3><p class="hint">${movie.year || 'Год не указан'} · ${movie.runtime ? `${movie.runtime} мин · ` : ''}${esc(movie.genres.join(' · '))}</p><p class="hint">${esc(reason)}</p><div class="footer-actions">${trailerButton(movie)}<button class="button" data-action="${action}" data-movie-id="${esc(movie.id)}">Выбрать на сегодня</button></div></article>`;
+  return `<article class="history-card discovery-card">${poster(movie)}<h3>${esc(movie.title)}</h3><p class="hint">${movie.year || 'Год не указан'} · ${movie.runtime ? `${movie.runtime} мин · ` : ''}${esc(movie.genres.join(' · '))}</p><p class="hint">${esc(reason)}</p><div class="footer-actions">${trailerButton(movie)}<button class="button" data-action="${action}" data-movie-id="${esc(movie.id)}">Выбрать на сегодня</button></div></article>`;
 }
 
 function personalSection() {
   const data = state.personalUser === state.user ? state.personal : null;
-  return `<section aria-labelledby="personal-title"><h2 id="personal-title" class="section-title">Подобрано для тебя</h2><p class="lede">${data?.cold_start ? 'Начнём со знакомства: пока личных оценок мало. Отмечайте фильмы — подборка начнёт учитывать ваш вкус.' : 'По вашим оценкам, реакциям и выбранным предпочтениям.'}</p>${state.personalError ? `<p role="status">${esc(state.personalError)}</p><button class="button secondary" data-action="retry-personal">Повторить</button>` : !data ? '<p role="status">Подбираем фильмы…</p>' : data.items.length ? `<div class="history-grid">${data.items.map(movie => discoveryCard(movie, movie.recommendation_reason)).join('')}</div>${data.limited ? '<p class="hint">Подходящих фильмов пока немного. Оцените ещё фильмы или проверьте выбранные ограничения.</p>' : ''}` : '<div class="empty">Пока нет подходящих фильмов. Проверьте ограничения или обновите каталог.</div>'}</section>`;
+  return `<section aria-labelledby="personal-title"><h2 id="personal-title" class="section-title">Подобрано для тебя</h2><p class="action-help">«Выбрать на сегодня» откроет экран вечера. Просмотр отметите отдельно.</p><p class="lede">${data?.cold_start ? 'Начнём со знакомства: пока личных оценок мало. Отмечайте фильмы — подборка начнёт учитывать ваш вкус.' : 'По вашим оценкам, реакциям и выбранным предпочтениям.'}</p>${state.personalError ? `<p role="status">${esc(state.personalError)}</p><button class="button secondary" data-action="retry-personal">Повторить</button>` : !data ? '<p role="status">Подбираем фильмы…</p>' : data.items.length ? `<div class="history-grid">${data.items.map(movie => discoveryCard(movie, movie.recommendation_reason)).join('')}</div>${data.limited ? '<p class="hint">Подходящих фильмов пока немного. Оцените ещё фильмы или проверьте выбранные ограничения.</p>' : ''}` : '<div class="empty">Пока нет подходящих фильмов. Проверьте ограничения или обновите каталог.</div>'}</section>`;
 }
 
 async function refreshPersonal() {
@@ -355,11 +355,11 @@ const quickEvenings = [
 ];
 
 function renderQuick() {
-  return shell(`<section><div class="screen-head"><p class="eyebrow">Быстрый вечер ⚡</p><h2>Что за вечер сегодня?</h2><p class="lede">Одно нажатие заменит настройки времени, сил и настроения.</p></div><div class="choice-stack">${quickEvenings.map(item => `<button class="choice quick-context" data-quick="${item.id}"><span>${item.icon} <strong>${item.title}</strong><small>${item.text}</small></span></button>`).join('')}</div><h3 class="question">Стоп-жанры на сегодня</h3><p class="lede">Отметьте только то, чего точно не хотите. Готовый сценарий сохранит эти запреты.</p><div class="chip-grid">${genres.map(g => `<button class="chip ${state.prefs.disliked_genres.includes(g)?'selected':''}" data-dislike="${g}" aria-pressed="${state.prefs.disliked_genres.includes(g)}">${g}</button>`).join('')}</div><div class="footer-actions"><button class="button ghost" data-view="home">Назад</button></div></section>`, {narrow:true});
+  return shell(`<section><div class="screen-head"><p class="eyebrow">Быстрый вечер ⚡</p><h2>Что за вечер сегодня?</h2><p class="lede">Выберите готовые условия для двоих. Затем каждый оценит знакомые фильмы, чтобы получить общий подбор.</p></div><div class="choice-stack">${quickEvenings.map(item => `<button class="choice quick-context" data-quick="${item.id}"><span>${item.icon} <strong>${item.title}</strong><small>${item.text}</small></span></button>`).join('')}</div><h3 class="question">Стоп-жанры на сегодня</h3><p class="lede">Отметьте только то, чего точно не хотите. Готовый сценарий сохранит эти запреты.</p><div class="chip-grid">${genres.map(g => `<button class="chip ${state.prefs.disliked_genres.includes(g)?'selected':''}" data-dislike="${g}" aria-pressed="${state.prefs.disliked_genres.includes(g)}">${g}</button>`).join('')}</div><div class="footer-actions"><button class="button ghost" data-view="home">Назад</button></div></section>`, {narrow:true});
 }
 
 function renderVibe() {
-  return shell(`<section><div class="screen-head"><p class="step">1 из 2 · настроение</p><h2>Какой сегодня вайб?</h2><p class="lede">Можно выбрать несколько. Второй увидит только итоговый мэтч.</p></div>
+  return shell(`<section><div class="screen-head"><p class="step">Выбор вдвоём · 1 из 2</p><h2>Какой сегодня вайб?</h2><p class="lede">Укажите своё настроение. Затем оцените знакомые фильмы; второй зритель ответит отдельно.</p></div>
     <div class="chip-grid">${moods.map(([id,emoji,label]) => `<button class="chip ${state.prefs.moods.includes(id)?'selected':''}" data-mood="${id}" aria-pressed="${state.prefs.moods.includes(id)}">${emoji} ${label}</button>`).join('')}</div>
     <h3 class="question">Сколько сегодня сил?</h3><div class="choice-stack">
       ${[['low','😴','Мозг выключен'],['medium','🙂','Что-нибудь нормальное'],['high','🧠','Готов внимательно смотреть']].map(([id,e,label]) => `<button class="choice ${state.prefs.energy===id?'selected':''}" data-energy="${id}"><span>${e} ${label}</span></button>`).join('')}
@@ -369,11 +369,11 @@ function renderVibe() {
 
 function renderFilters() {
   const choice = (field, value, emoji, label) => `<button class="choice ${String(state.prefs[field])===String(value)?'selected':''}" data-field="${field}" data-value="${value ?? ''}"><span>${emoji} ${label}</span></button>`;
-  return shell(`<section><div class="screen-head"><p class="step">2 из 2 · рамки вечера</p><h2>Чего сегодня точно хочется избежать?</h2><p class="lede">Стоп-жанры важнее любых высоких рейтингов.</p></div>
+  return shell(`<section><div class="screen-head"><p class="step">Выбор вдвоём · 2 из 2</p><h2>Чего сегодня точно хочется избежать?</h2><p class="lede">Стоп-жанры важнее любых высоких рейтингов.</p></div>
     <h3 class="question">Длительность</h3><div class="choice-stack">${choice('max_runtime',90,'⏱','До 90 минут')}${choice('max_runtime',120,'🍿','До 2 часов')}${choice('max_runtime',150,'🎬','До 2.5 часов')}${choice('max_runtime',null,'♾','Неважно')}</div>
     <h3 class="question">Эпоха</h3><div class="choice-stack">${choice('min_year',2015,'✨','Относительно новое')}${choice('min_year',2000,'📀','2000+')}${choice('min_year',1980,'📼','80–90-е тоже ок')}${choice('min_year',null,'🎞','Вообще неважно')}</div>
     <h3 class="question">Сегодня точно НЕ хотим</h3><div class="chip-grid">${genres.map(g => `<button class="chip ${state.prefs.disliked_genres.includes(g)?'selected':''}" data-dislike="${g}" aria-pressed="${state.prefs.disliked_genres.includes(g)}">${g}</button>`).join('')}</div>
-    <div class="footer-actions"><button class="button ghost" data-view="vibe">Назад</button><button class="button large" data-action="save-prefs">К быстрым реакциям</button></div>
+    <div class="footer-actions"><button class="button ghost" data-view="vibe">Назад</button><button class="button large" data-action="save-prefs">Оценить знакомые фильмы</button></div>
   </section>`, {narrow:true});
 }
 
@@ -385,13 +385,14 @@ function renderSwipe() {
   const movie = state.deck[0];
   const progress = state.total - state.deck.length;
   if (!movie) return renderNoAvailableMovies();
-  return shell(`<section><div class="progress-line"><div class="track"><i style="width:${(progress/state.total)*100}%"></i></div><strong>${progress + 1} / ${state.total}</strong></div>
-    <aside class="swipe-guidance" id="swipe-guidance"><strong>Вы уже смотрели этот фильм?</strong> Если да — оцените впечатление от просмотра. Если нет — нажмите «Не смотрел(а)». «Нравится» здесь означает оценку просмотренного фильма, а не желание его посмотреть.</aside>
+  return shell(`<section class="shared-review"><div class="progress-line"><div class="track"><i style="width:${(progress/state.total)*100}%"></i></div><strong>${progress + 1} / ${state.total}</strong></div>
+    <div class="shared-heading"><h1>Смотрели этот фильм?</h1><p id="swipe-guidance">Если смотрели — оцените впечатление. Если нет — выберите «Не смотрел(а)».</p></div>
     <div class="swipe-stage"><article class="swipe-card" id="swipe-card" tabindex="0" aria-label="${esc(movie.title)}" aria-describedby="swipe-guidance">
-      <div class="poster-wrap">${poster(movie)}<div class="poster-shade"></div><div class="poster-copy"><h2>${esc(movie.title)}</h2><div class="meta"><span>${movie.year}</span><span>•</span><span>${movie.genres.join(' · ')}</span><span>•</span><span>${movie.runtime} мин</span></div><p class="card-overview">${esc(movie.overview || 'Описание пока не добавлено')}</p></div></div>
+      <div class="shared-film"><div class="shared-poster">${poster(movie)}</div><div class="shared-film-copy"><h2>${esc(movie.title)}</h2><p class="meta">${movie.year} · ${movie.runtime} мин<br>${esc(movie.genres.join(' · '))}</p><p class="shared-synopsis">${esc(tonightSynopsis(movie))}</p></div></div>
+      <div class="reaction-row" aria-label="Впечатление от просмотренного фильма">${reactionMap.map(([id,e,label]) => `<button class="reaction" data-reaction="${id}" title="${label}"><span class="reaction-icon" aria-hidden="true">${e}</span><span>${label}</span></button>`).join('')}</div>
+      <p class="action-help">Ответы сохраняются для вашего профиля и помогают подбору для двоих.</p>
+      <details class="shared-help"><summary>Зачем оценивать знакомые фильмы?</summary><p>Так Tonight узнаёт ваш вкус. Здесь оценивают прошлый просмотр, а не желание посмотреть фильм. Оба зрителя отвечают отдельно.</p><p class="keyboard-hint">← не понравился · ↑ очень понравился · → понравился · ↓ нормальный · ? не смотрел(а)</p></details>
       ${movie.overview ? descriptionDisclosure(movie.overview, movie.id, 'card-description') : ''}
-      <div class="reaction-row">${reactionMap.map(([id,e,label]) => `<button class="reaction" data-reaction="${id}" title="${label}">${e}<span>${label}</span></button>`).join('')}</div>
-      <p class="hint keyboard-hint">← не хочу · ↑ обожаю · → нравится · ↓ норм · ? не смотрел(а)</p>
     </article></div></section>`);
 }
 
@@ -450,7 +451,7 @@ function renderSelected() {
   const traits = similarityTraits(movie);
   return shell(`<section class="selected-layout">${poster(movie)}<div><p class="eyebrow">Финальное решение</p><h1>${esc(movie.title)}</h1><div class="meta"><span>${movie.year}</span><span>•</span><span>${movie.runtime} мин</span><span>•</span><span>${movie.genres.join(' · ')}</span></div>${movieDescription(movie.overview, movie.id)}<p class="hint">${state.session.viewing_company==='solo'?'Смотрите самостоятельно — второй зритель не нужен. После фильма можно поставить свою оценку.':'Будем смотреть? Если да — после просмотра зрители поставят свои оценки, и Tonight учтёт их в следующих рекомендациях.'}</p><div class="footer-actions" style="justify-content:flex-start">${trailerButton(movie)}<button class="button large" data-action="start-watching">${state.session.viewing_company==='solo'?'🍿 Начать одиночный вечер':'✅ Будем смотреть'}</button><button class="button secondary large" data-action="decline">✋ Не смотрим</button><button class="button ghost" data-action="choose-another">🎲 Другой вариант</button></div>
     <details class="avoid-box"><summary>🚫 Не предлагать похожее</summary><p>Это сильнее обычного «не смотрим». Ослабим в будущих рекомендациях:</p><ul><li><strong>Сочетание жанров:</strong> ${esc(traits.genres.join(', ') || 'как у этого фильма')}</li><li><strong>Настроение:</strong> ${esc(traits.moods.join(', ') || 'похожее')}</li>${traits.franchise ? '<li><strong>Франшизу:</strong> следующие части этой серии</li>' : ''}</ul><p class="hint">Целый жанр не будет заблокирован. Действие можно отменить в «Наш вкус».</p><button class="button secondary" data-action="confirm-avoid-similar">Подтвердить и выбрать другой</button></details>
-    ${state.tonight?.user===state.user && state.tonight?.data ? '<button class="button ghost" data-tonight-open>← К вариантам Tonight Mode</button>' : ''}</div></section>`);
+    ${state.tonight?.user===state.user && state.tonight?.data ? '<button class="button ghost" data-tonight-open>← К вариантам подбора</button>' : ''}</div></section>`);
 }
 
 function renderWatching() {
@@ -515,7 +516,7 @@ function renderWatchlist() {
     return (!query || searchable.includes(query)) && (!state.watchlistGenre || movie.genres?.includes(state.watchlistGenre));
   });
   const filters = `<div class="search-form watchlist-filters"><input data-watchlist-search value="${esc(state.watchlistQuery)}" placeholder="Найти в списке" maxlength="100" aria-label="Найти фильм в списке на потом"><select data-watchlist-genre aria-label="Фильтр по жанру"><option value="">Все жанры</option>${genresInList.map(genre => `<option value="${esc(genre)}" ${genre === state.watchlistGenre ? 'selected' : ''}>${esc(genre)}</option>`).join('')}</select></div>`;
-  const cards = visibleItems.length ? `<div class="history-grid">${visibleItems.map(movie => `<article class="history-card">${poster(movie)}<h3>${esc(movie.title)}</h3><p class="hint">${esc(movie.overview || 'Описание появится после обновления каталога')}</p>${movie.fits_tonight === true ? '<p class="hint">✓ Подходит под сегодняшний план</p>' : ''}${movie.franchise_warning ? `<p class="hint">⚠ ${esc(movie.franchise_warning)}</p>` : ''}${movie.saved_by ? `<p class="hint">Добавил(а): ${esc(names[movie.saved_by])}</p>` : ''}${movie.deferred_reason ? `<p class="hint">Отложили: ${esc(movie.deferred_reason)}</p>` : ''}<div class="footer-actions">${trailerButton(movie, 'button secondary')}<button class="button" data-action="watch-saved" data-movie-id="${movie.id}">✅ Будем смотреть</button><button class="button ghost" data-action="remove-later" data-movie-id="${movie.id}">Убрать</button></div></article>`).join('')}</div>` : `<div class="empty compact"><h3>Ничего не нашли</h3><p>Попробуйте другое слово или жанр.</p><button class="button ghost" data-action="reset-watchlist-filters">Сбросить фильтры</button></div>`;
+  const cards = visibleItems.length ? `<div class="history-grid">${visibleItems.map(movie => `<article class="history-card">${poster(movie)}<h3>${esc(movie.title)}</h3><p class="hint">${esc(movie.overview || 'Описание появится после обновления каталога')}</p>${movie.fits_tonight === true ? '<p class="hint">✓ Подходит под сегодняшний план</p>' : ''}${movie.franchise_warning ? `<p class="hint">⚠ ${esc(movie.franchise_warning)}</p>` : ''}${movie.saved_by ? `<p class="hint">Добавил(а): ${esc(names[movie.saved_by])}</p>` : ''}${movie.deferred_reason ? `<p class="hint">Отложили: ${esc(movie.deferred_reason)}</p>` : ''}<div class="footer-actions">${trailerButton(movie, 'button secondary')}<button class="button" data-action="watch-saved" data-movie-id="${movie.id}">Выбрать на сегодня</button><button class="button ghost" data-action="remove-later" data-movie-id="${movie.id}">Убрать</button></div></article>`).join('')}</div>` : `<div class="empty compact"><h3>Ничего не нашли</h3><p>Попробуйте другое слово или жанр.</p><button class="button ghost" data-action="reset-watchlist-filters">Сбросить фильтры</button></div>`;
   return shell(`<section><div class="screen-head"><p class="eyebrow">Общий список ♡</p><h2>На потом</h2><p class="lede">Варианты, которые понравились, но не подошли именно сегодня.</p>${state.watchlistHiddenCount ? `<p class="hint">Скрыто сохранённых фильмов: ${state.watchlistHiddenCount}. Русское название или состоявшийся прокат пока не подтверждены. Записи в списке сохранены.</p>` : ''}${items.some(movie => movie.fits_tonight !== null) ? '<p class="hint">Сначала — то, что подходит под сегодняшний план. Остальные фильмы остаются в списке.</p>' : ''}</div>${items.length ? `${filters}${cards}` : '<div class="empty"><h3>Пока пусто</h3><p>Сохраняйте подходящие фильмы из результатов, чтобы вернуться к ним в другой вечер.</p></div>'}</section>`);
 }
 
@@ -1332,7 +1333,7 @@ async function installUpdate() {
 const tonightMoods = [['laugh','☺','Хочу посмеяться'],['scary','◈','Что-то напряжённое'],['cozy','☕','Уютный вечер'],['wow','✧','Хочу удивиться'],['smart','◎','Хочу подумать'],['atmosphere','☾','Что-то атмосферное'],['surprise','✦','Удиви меня']];
 const tonightCompanies = [['solo','Один'],['couple','Вдвоём'],['friends','С друзьями'],['family','С семьёй']];
 function tonightEntry() {
-  return `<section class="tonight-entry"><div><p class="eyebrow">Tonight Mode</p><h2>Что смотрим сегодня?</h2><p class="lede">Укажите настроение, время и компанию — выберите из пяти вариантов.</p></div><button class="button large" data-tonight-open>Подобрать фильм <span aria-hidden="true">↗</span></button></section>`;
+  return `<section class="tinder-entry"><div><h3>Подбор по условиям</h3><p>Задайте настроение, время и компанию — получите до пяти фильмов. Можно выбрать для себя или двоих.</p></div><button class="button secondary" data-tonight-open>Задать условия</button></section>`;
 }
 function saveTonight() {
   try { sessionStorage.setItem(`tonight:mode:${state.user}`, JSON.stringify(state.tonight)); } catch (_) {}
@@ -1362,7 +1363,7 @@ function tonightSynopsis(m) {
 }
 function tonightCard(m, detail=false) {
   const t=state.tonight, actions=new Set([...(t.actions[m.id] || m.viewer_actions || []),...(m.saved?['watchlist']:[])]);
-  return `<article class="tonight-film ${detail?'is-detail':''}"><button class="tonight-poster" data-tm-detail="${esc(m.id)}" aria-label="Подробнее: ${esc(m.title)}">${poster(m)}</button><div class="tonight-film-body"><p class="eyebrow">${tonightRating(m)}</p><h3><button class="tonight-title" data-tm-detail="${esc(m.id)}">${esc(m.title)}</button></h3><p class="hint">${m.year || 'Год не указан'} · ${m.runtime ? `${m.runtime} мин`:'Длительность не указана'}</p><p class="hint">${esc((m.genres || []).join(' · '))}</p><p class="${detail?'':'tonight-overview'}">${esc(detail?(m.overview || 'Описание отсутствует в каталоге.'):tonightSynopsis(m))}</p><p class="tonight-reason">✦ ${esc(m.recommendation_reason)}${t.filters.max_runtime ? ` Не дольше ${t.filters.max_runtime} минут.`:''}</p><div class="tonight-film-actions">${state.session?.status!=='watching'?`<button class="button" data-tm-select="${esc(m.id)}">${t.filters.company==='solo'?'Смотреть одному':'Выбрать на сегодня'}</button>`:''}<details class="film-menu" data-disclosure-key="film-${esc(m.id)}"><summary>Другие действия</summary><div class="choice-stack">${[['watchlist','♡ Хочу посмотреть'],['watched','✓ Уже смотрел'],['dislike','− Не интересно']].map(([id,label])=>`<button class="button ${actions.has(id)?'':'secondary'}" data-tm-action="${id}" data-tm-id="${esc(m.id)}" ${actions.has(id) || t.saving?'disabled':''} aria-pressed="${actions.has(id)}">${label}${actions.has(id)?' · сохранено':''}</button>`).join('')}</div></details></div></div></article>`;
+  return `<article class="tonight-film ${detail?'is-detail':''}"><button class="tonight-poster" data-tm-detail="${esc(m.id)}" aria-label="Подробнее: ${esc(m.title)}">${poster(m)}</button><div class="tonight-film-body"><p class="eyebrow">${tonightRating(m)}</p><h3><button class="tonight-title" data-tm-detail="${esc(m.id)}">${esc(m.title)}</button></h3><p class="hint">${m.year || 'Год не указан'} · ${m.runtime ? `${m.runtime} мин`:'Длительность не указана'}</p><p class="hint">${esc((m.genres || []).join(' · '))}</p><p class="${detail?'':'tonight-overview'}">${esc(detail?(m.overview || 'Описание отсутствует в каталоге.'):tonightSynopsis(m))}</p><p class="tonight-reason">✦ ${esc(m.recommendation_reason)}${t.filters.max_runtime ? ` Не дольше ${t.filters.max_runtime} минут.`:''}</p><div class="tonight-film-actions">${state.session?.status!=='watching'?`<button class="button" data-tm-select="${esc(m.id)}">Выбрать на сегодня</button>`:''}<details class="film-menu" data-disclosure-key="film-${esc(m.id)}"><summary>Сохранить или отметить просмотр</summary><p class="action-help">«На потом» — общий список. «Уже смотрел» — личная отметка без оценки. «Не интересно» — сигнал для подбора.</p><div class="choice-stack">${[['watchlist','♡ Сохранить на потом'],['watched','✓ Уже смотрел'],['dislike','− Не интересно']].map(([id,label])=>`<button class="button ${actions.has(id)?'':'secondary'}" data-tm-action="${id}" data-tm-id="${esc(m.id)}" ${actions.has(id) || t.saving?'disabled':''} aria-pressed="${actions.has(id)}">${label}${actions.has(id)?' · сохранено':''}</button>`).join('')}</div></details></div></div></article>`;
 }
 function tonightPeriods() {
   const year=new Date().getFullYear();
@@ -1388,9 +1389,9 @@ function renderTonight() {
     const content=[()=>tonightChoices('mood',tonightMoods),()=>tonightChoices('max_runtime',[[90,'До 90 минут'],[120,'До 120 минут'],[150,'До 150 минут'],[null,'Неважно']]),()=>tonightChoices('company',tonightCompanies),()=>`<div class="tonight-options"><label>Минимальный рейтинг <select data-tm-input="min_rating">${[0,6,7,8,9].map(n=>`<option value="${n}" ${f.min_rating===n?'selected':''}>${n?`${n} / 10`:'Неважно'}</option>`).join('')}</select></label>${tonightYearControls(t)}<fieldset><legend>Исключить жанры</legend><div class="chip-grid">${[...new Set([...genres,'семейный','приключения','криминал','история','музыка','военный','вестерн'])].map(g=>`<button class="chip ${f.excluded_genres.includes(g)?'selected':''}" data-tm-genre="${g}" aria-pressed="${f.excluded_genres.includes(g)}">${g}</button>`).join('')}</div></fieldset><label class="tonight-check"><input type="checkbox" data-tm-watched ${f.exclude_watched?'checked':''}> Исключить просмотренные фильмы</label><p class="hint">Сложность сюжета не оцениваем: в каталоге нет надёжных данных.</p></div>`][t.step]();
     body=`${nav}<div class="tonight-stage" key="${t.step}"><h2 tabindex="-1" data-tm-heading>${titles[t.step]}</h2><p class="lede">${t.step===3?'Все параметры на этом шаге необязательны.':t.step===2?'Вдвоём учитываем вкус обоих зрителей. Для друзей — ваш вкус; для семьи — семейные жанры. Это не возрастной допуск.':''}</p>${content}<div class="footer-actions"><button class="button ghost" data-tm-back>${t.step?'← Назад':'На главную'}</button><button class="button" data-tm-next ${t.busy?'disabled':''}>${t.data?'Применить изменения':t.step===3?'Подобрать фильмы':'Далее →'}</button>${t.data?'<button class="button ghost" data-tm-cancel>Отменить изменения</button>':''}</div></div>`;
   } else {
-    body=`${nav}<div class="screen-head"><h2 tabindex="-1" data-tm-results>Ваши варианты на вечер.</h2><p class="lede">${t.data?.cold_start?'Пока знакомимся с вашим вкусом: учитываем настроение и данные каталога.':'По оценкам зрителей и условиям этого вечера.'}</p><p class="hint">${esc(tonightMoods.find(m=>m[0]===f.mood)?.[2] || '')} · ${f.max_runtime?`до ${f.max_runtime} мин`:'любая длительность'} · ${esc(tonightCompanies.find(c=>c[0]===f.company)?.[1] || '')}. Нажмите на нужный шаг выше, чтобы изменить условия.</p></div>${t.busy?'<div class="empty" role="status">Tonight IQ подбирает фильмы…</div>':`${t.data?.limited?`<aside class="tonight-empty" role="status"><h3>${t.data.items.length?`Нашлось ${t.data.items.length} из 5 вариантов`:'Подходящие варианты закончились'}</h3><p>${t.data.exhausted?'Уже показанные фильмы исключены из повторного подбора. ':''}${t.data.catalog_available===0?'В каталоге пока нет фильмов с подтверждёнными данными о прокате. Обновите каталог в разделе «Каталог».':'Сочетание условий, истории просмотров и исключений оставляет мало фильмов. Измените условия или снимите исключение просмотренных.'} Ограничения сохранены.</p><div class="footer-actions">${(t.data.relaxations || []).map(r=>`<button class="button secondary" data-tm-relax="${r.field}">Ослабить: ${esc(r.label)} · до ${r.available} вариантов</button>`).join('')}<button class="button ghost" data-tm-step="3">Изменить фильтры</button>${t.seen.length?'<button class="button ghost" data-tm-repeat>Вернуться к уже показанным</button>':''}</div></aside>`:''}<div class="tonight-films">${(t.data?.items || []).map(m=>tonightCard(m)).join('')}</div><div class="footer-actions"><button class="button" data-tm-more ${!t.data?.items.length?'disabled':''}>Другие варианты ↻</button><button class="button ghost" data-view="home">На главную</button></div>`}`;
+    body=`${nav}<div class="screen-head"><h2 tabindex="-1" data-tm-results>Ваши варианты на вечер.</h2><p class="lede">${t.data?.cold_start?'Пока знакомимся с вашим вкусом: учитываем настроение и данные каталога.':'По оценкам зрителей и условиям этого вечера.'}</p><p class="hint">${esc(tonightMoods.find(m=>m[0]===f.mood)?.[2] || '')} · ${f.max_runtime?`до ${f.max_runtime} мин`:'любая длительность'} · ${esc(tonightCompanies.find(c=>c[0]===f.company)?.[1] || '')}. Нажмите на нужный шаг выше, чтобы изменить условия.</p></div>${t.busy?'<div class="empty" role="status">Tonight IQ подбирает фильмы…</div>':`${t.data?.limited?`<aside class="tonight-empty" role="status"><h3>${t.data.items.length?`Нашлось ${t.data.items.length} из 5 вариантов`:'Подходящие варианты закончились'}</h3><p>${t.data.exhausted?'Уже показанные фильмы исключены из повторного подбора. ':''}${t.data.catalog_available===0?'В каталоге пока нет фильмов с подтверждёнными данными о прокате. Обновите каталог в разделе «Каталог».':'Сочетание условий, истории просмотров и исключений оставляет мало фильмов. Измените условия или снимите исключение просмотренных.'} Ограничения сохранены.</p><div class="footer-actions">${(t.data.relaxations || []).map(r=>`<button class="button secondary" data-tm-relax="${r.field}">Ослабить: ${esc(r.label)} · до ${r.available} вариантов</button>`).join('')}<button class="button ghost" data-tm-step="3">Изменить фильтры</button>${t.seen.length?'<button class="button ghost" data-tm-repeat>Вернуться к уже показанным</button>':''}</div></aside>`:''}<p class="action-help">«Выбрать на сегодня» откроет экран вечера. Начало и завершение просмотра отмечаются отдельно.</p><div class="tonight-films">${(t.data?.items || []).map(m=>tonightCard(m)).join('')}</div><div class="footer-actions"><button class="button" data-tm-more ${!t.data?.items.length?'disabled':''}>Другие варианты ↻</button><button class="button ghost" data-view="home">На главную</button></div>`}`;
   }
-  return shell(`<section class="tonight-mode" aria-busy="${!!t.busy}"><p class="eyebrow">Tonight Mode</p>${t.error?`<p role="alert" class="constraint-warning">${esc(t.error)}</p>`:''}${body}</section>`);
+  return shell(`<section class="tonight-mode" aria-busy="${!!t.busy}"><p class="eyebrow">Подбор на вечер</p>${t.error?`<p role="alert" class="constraint-warning">${esc(t.error)}</p>`:''}${body}</section>`);
 }
 async function fetchTonight(more=false) {
   const t=state.tonight;
@@ -1449,7 +1450,7 @@ function bindTonight() {
   root.querySelectorAll('[data-tm-select]').forEach(el=>el.addEventListener('click',event=>{t.detail=null;saveTonight();selectTonightMovie(event.currentTarget.dataset.tmSelect);}));
   root.querySelectorAll('[data-tm-action]').forEach(el=>el.addEventListener('click',async()=>{
     if(t.saving)return;t.saving=true;el.disabled=true;
-    try {await api(`/api/tonight/${t.user}/movies/${encodeURIComponent(el.dataset.tmId)}`,{method:'POST',body:JSON.stringify({action:el.dataset.tmAction})});const m=t.data.items.find(m=>m.id===el.dataset.tmId);t.actions[m.id]=[...new Set([...(t.actions[m.id] || m.viewer_actions || []),el.dataset.tmAction])];toast('Сохранено');}
+    try {await api(`/api/tonight/${t.user}/movies/${encodeURIComponent(el.dataset.tmId)}`,{method:'POST',body:JSON.stringify({action:el.dataset.tmAction})});const m=t.data.items.find(m=>m.id===el.dataset.tmId);t.actions[m.id]=[...new Set([...(t.actions[m.id] || m.viewer_actions || []),el.dataset.tmAction])];toast(el.dataset.tmAction==='watchlist'?'Добавлено в общий список «На потом»':el.dataset.tmAction==='watched'?'Просмотр отмечен без оценки':'Ответ сохранён: учтём в вашем подборе');}
     catch(e){toast(e.message);}finally{t.saving=false;saveTonight();if(state.view==='tonight'&&state.tonight===t)render();}
   }));
 }
@@ -1488,9 +1489,10 @@ function renderTinder(){
   const t=state.tinder,m=t?.queue[0];if(!t)return shell('');
   const disabled=t.busy?'disabled':'';
   const details=m?`<p class="eyebrow">${tonightRating(m)}</p><h2>${esc(m.title)}</h2><p class="hint">${m.year||'Год не указан'} · ${m.runtime?`${m.runtime} мин`:'Длительность не указана'}</p><p class="hint">${esc((m.genres||[]).join(' · '))}</p>`:'';
-  const undo=`<button class="button secondary tinder-undo" data-kt-undo aria-label="Отменить последнее действие" title="Отменить последнее действие" ${!t.history.length||t.busy||t.detail?'disabled':''}>↶</button>`;
-  return shell(`<section class="tinder-mode" aria-busy="${!!t.busy}"><div class="tinder-heading"><h1>Кино-Tinder</h1><details class="mode-menu"><summary>Настройки</summary><div><label class="tinder-save"><input type="checkbox" data-kt-save ${t.save?'checked':''} ${disabled}> «Интересно» также добавляет в «На потом»</label><button class="button ghost" data-kt-new ${disabled}>Новая сессия</button><p class="hint keyboard-hint">← / → / ↑ — действия · Enter — подробности · Z — отмена</p></div></details></div>
+  const undo=`<button class="button secondary tinder-undo" data-kt-undo aria-label="Отменить последнее действие" title="Отменить последнее действие" ${!t.history.length||t.busy||t.detail?'disabled':''}><span aria-hidden="true">↶</span><span class="undo-label">Отмена</span></button>`;
+  return shell(`<section class="tinder-mode" aria-busy="${!!t.busy}"><div class="tinder-heading"><h1>Кино-Tinder</h1><details class="mode-menu"><summary>Настройки</summary><div><label class="tinder-save"><input type="checkbox" data-kt-save ${t.save?'checked':''} ${disabled}> Добавлять интересные фильмы в общий список «На потом»</label><button class="button ghost" data-kt-new ${disabled}>Новая сессия</button><p class="hint keyboard-hint">← / → / ↑ — действия · Enter — подробности · Z — отмена</p></div></details></div>
     ${t.error?`<p role="alert" class="constraint-warning">${esc(t.error)}</p><button class="button secondary" data-kt-retry>${t.pending?'Повторить сохранение':'Повторить загрузку'}</button>`:''}
+    <p class="mode-explanation">Отмечайте интерес к будущему просмотру. «Уже смотрел» сохраняет просмотр без оценки.</p><p class="action-help">${t.save?'Интересные фильмы также сохраняются в общем списке «На потом».':'Интерес не добавляет фильм в список. Автосохранение можно включить в настройках.'}</p>
     ${t.detail&&m?`<div class="tinder-detail"><button class="button ghost" data-kt-close>← К карточке</button>${details}<p>${esc(m.overview||'Описание отсутствует в каталоге.')}</p><p class="tonight-reason">${esc(m.recommendation_reason || '')}</p></div>`:m?`
     <article class="tinder-card" data-kt-card tabindex="0" aria-label="${esc(m.title)}">
       <div class="tinder-image">${poster(m)}<span class="tinder-direction" aria-hidden="true"></span></div>
@@ -1517,6 +1519,7 @@ async function tinderAct(action){
     const result=await api(`/api/tinder/${t.user}/movies/${encodeURIComponent(m.id)}`,{method:'POST',body:JSON.stringify(t.pending)});
     const card=root.querySelector('[data-kt-card]');
     if(card&&!matchMedia('(prefers-reduced-motion: reduce)').matches){card.classList.add(`exit-${action}`);await new Promise(resolve=>setTimeout(resolve,180));}
+    toast(action==='interest'?(t.pending.save_watchlist?'Интерес сохранён · фильм в «На потом»':'Интерес сохранён для подбора'):action==='watched'?'Просмотр отмечен без оценки':'Ответ сохранён: учтём в вашем подборе');
     t.history.push({id:result.id,movie:m});t.queue.shift();t.pending=null;saveTinder();
     if(!t.queue.length){t.busy=false;await fetchTinder();}
   }catch(e){t.error=e.message;}
@@ -1525,7 +1528,7 @@ async function tinderAct(action){
 async function tinderUndo(){
   const t=state.tinder,entry=t?.history.at(-1);if(!entry||t.busy||t.detail)return;
   t.busy=true;t.error='';render();
-  try{await api(`/api/tinder/${t.user}/undo/${entry.id}`,{method:'POST'});t.history.pop();t.queue=t.queue.filter(m=>m.id!==entry.movie.id);t.queue.unshift(entry.movie);t.pending=null;}
+  try{await api(`/api/tinder/${t.user}/undo/${entry.id}`,{method:'POST'});t.history.pop();toast('Последнее действие отменено');t.queue=t.queue.filter(m=>m.id!==entry.movie.id);t.queue.unshift(entry.movie);t.pending=null;}
   catch(e){t.error=e.message;}
   finally{t.busy=false;saveTinder();if(state.view==='tinder'&&state.tinder===t){render();root.querySelector('[data-kt-card]')?.focus({preventScroll:true});}}
 }
@@ -1537,7 +1540,7 @@ function bindTinder(){
   root.querySelectorAll('[data-kt-new]').forEach(el=>el.addEventListener('click',()=>fetchTinder(true)));
   root.querySelector('[data-kt-retry]')?.addEventListener('click',()=>t.pending?tinderAct(t.pending.action):fetchTinder());
   root.querySelector('[data-kt-undo]')?.addEventListener('click',tinderUndo);
-  root.querySelector('[data-kt-save]')?.addEventListener('change',e=>{t.save=e.target.checked;try{localStorage.setItem(`tonight:tinder-save:${t.user}`,t.save?'1':'0');}catch(_){}saveTinder();});
+  root.querySelector('[data-kt-save]')?.addEventListener('change',e=>{t.save=e.target.checked;try{localStorage.setItem(`tonight:tinder-save:${t.user}`,t.save?'1':'0');}catch(_){}saveTinder();render();});
   root.querySelectorAll('[data-kt-action]').forEach(el=>el.addEventListener('click',()=>tinderAct(el.dataset.ktAction)));
   const open=()=>{if(!t.busy){t.detail=true;render();root.querySelector('[data-kt-close]')?.focus();}};
   root.querySelector('[data-kt-details]')?.addEventListener('click',open);
@@ -1563,20 +1566,26 @@ function tinderKeydown(e){
 
 // One real IQ result is chosen before its poster is animated.
 function rouletteEntry(){
-  return `<section class="tinder-entry"><div><h2>Кинорулетка</h2><p>Один вариант с учётом вашего вкуса.</p></div><button class="button secondary" data-roulette-open>Реши за меня 🎲</button></section>`;
+  return `<section class="tinder-entry"><div><h3>Кинорулетка</h3><p>Задайте условия — получите один фильм. Можно попросить другой.</p></div><button class="button secondary" data-roulette-open>Открыть рулетку</button></section>`;
 }
 function saveRoulette(){
   const r=state.roulette;if(!r)return;
-  try{sessionStorage.setItem(`tonight:roulette:${r.user}`,JSON.stringify({user:r.user,filters:r.filters,seen:r.seen,accepted:r.accepted,acceptedTitle:r.acceptedTitle,short:r.short}));}catch(_){}
+  try{sessionStorage.setItem(`tonight:roulette:${r.user}`,JSON.stringify({user:r.user,filters:r.filters,seen:r.seen,accepted:r.accepted,acceptedTitle:r.acceptedTitle}));}catch(_){}
 }
 function openRoulette(){
   if(!state.user)return;
   if(state.roulette?.user!==state.user){
     let saved;try{saved=JSON.parse(sessionStorage.getItem(`tonight:roulette:${state.user}`));}catch(_){}
-    state.roulette=saved?.user===state.user?saved:{user:state.user,filters:{mode:'smart',max_runtime:null,min_rating:0,min_year:null,max_year:null,included_genres:[],excluded_genres:[],exclude_watched:true},seen:[],accepted:null,short:false};
-    state.roulette.busy=false;
+    state.roulette=saved?.user===state.user?saved:{user:state.user,filters:{mode:'smart',max_runtime:null,min_rating:0,min_year:null,max_year:null,included_genres:[],excluded_genres:[],exclude_watched:true},seen:[],accepted:null};
+    state.roulette.busy=false; delete state.roulette.short;
   }
   state.view='roulette';render();
+}
+const ROULETTE_REVEAL_MS = 2200;
+function rouletteDraw(movie) {
+  // Decorative frames reveal the one result already chosen by the server.
+  // No other film is selected, rated, or added to history during the draw.
+  return `<article class="roulette-draw" style="--draw-duration:${ROULETTE_REVEAL_MS}ms" aria-busy="true"><div class="draw-window" aria-hidden="true"><div class="draw-track">${Array.from({length:7},(_,i)=>`<div class="draw-frame draw-placeholder" style="--frame-hue:${i%3}"><span class="draw-film-mark"></span></div>`).join('')}<div class="draw-frame draw-winner">${poster(movie)}</div></div><div class="draw-marker"></div></div><div class="draw-caption" role="status"><p class="eyebrow">Кинорулетка</p><h2>Открываем ваш фильм…</h2><p>С учётом выбранных условий</p></div></article>`;
 }
 function renderRoulette(){
   const r=state.roulette;if(!r||r.user!==state.user)return renderHome();
@@ -1585,12 +1594,12 @@ function renderRoulette(){
   return shell(`<section class="roulette-mode"><div class="tinder-heading"><div><h1>Кинорулетка</h1></div></div>
   <details class="roulette-configuration" data-r-settings data-render-state ${r.settingsOpen??!m?'open':''}><summary>Настройки выбора</summary><fieldset class="roulette-settings" ${locked?'disabled':''}><legend>Как выбираем?</legend><div class="tonight-choices">${[['smart','Умный выбор','Больше веса вашему вкусу'],['surprise','Полная неожиданность','Больше шансов новым жанрам'],['watchlist','Из моего списка','Только из «На потом»']].map(([id,title,desc])=>`<button class="choice ${f.mode===id?'selected':''}" data-r-mode="${id}" aria-pressed="${f.mode===id}"><strong>${title}</strong><small>${desc}</small></button>`).join('')}</div>
   <details class="roulette-filters" ${r.filtersOpen?'open':''}><summary>Быстрые ограничения</summary><p class="hint">Применяем вместе с сохранёнными ограничениями профиля. Автоматически ничего не ослабляем.</p><div class="roulette-inputs">${[['max_runtime','Максимум минут',1,1440],['min_rating','Минимальный рейтинг',0,10],['min_year','Год от',1888,2100],['max_year','Год до',1888,2100]].map(([key,label,min,max])=>`<label>${label}<input type="number" data-r-input="${key}" min="${min}" max="${max}" step="${key==='min_rating'?'.1':'1'}" value="${f[key]??''}" placeholder="Неважно"></label>`).join('')}</div>${genreChoices('included_genres','Жанры: хотя бы один из выбранных')}${genreChoices('excluded_genres','Исключить жанры')}<label class="tonight-check"><input type="checkbox" data-r-watched ${f.exclude_watched?'checked':''}> Исключить уже просмотренные</label></details>
-  <label class="tonight-check"><input type="checkbox" data-r-short ${r.short?'checked':''}> Короткая анимация</label></fieldset><p class="hint">Скрытые и нежелательные фильмы исключены во всех режимах.</p></details>
-  ${r.acceptedTitle&&r.accepted!==m?.id?`<p class="tonight-reason">Ваш выбор в этой сессии: ${esc(r.acceptedTitle)}</p>`:''}
+  </fieldset><p class="hint">Скрытые и нежелательные фильмы исключены во всех режимах.</p></details>
+  ${r.acceptedTitle&&r.accepted!==m?.id?`<p class="tonight-reason">Выбрано в этой вкладке: ${esc(r.acceptedTitle)}</p>`:''}
   ${!m?`<button class="button large roulette-launch" data-r-launch ${locked?'disabled':''}>${r.busy?'Подбираем фильм…':'Реши за меня'}</button>`:''}
   ${r.error?`<p class="error" role="alert">${esc(r.error)}</p>`:''}
   ${r.empty?`<div class="empty" role="status"><h2>${r.watchlistCount===0?'В списке пока пусто':'Подходящие фильмы закончились'}</h2><p>${r.watchlistCount===0?'Добавьте фильмы в «На потом» или выберите другой режим.':'Измените быстрые ограничения или сохранённые ограничения профиля. Уже предложенные в этой сессии фильмы исключены; ограничения сохранены.'}</p></div>`:''}
-  ${m?`<article class="roulette-result ${r.spinning?'is-spinning':''}" aria-busy="${!!r.spinning}"><div class="roulette-poster">${poster(m)}${r.spinning?'<div class="roulette-orbit" aria-hidden="true">✦</div>':''}</div>${r.spinning?`<div><p role="status">Один фильм для вашего вечера…</p><button class="button secondary" data-r-skip>Пропустить анимацию</button></div>`:`<div class="roulette-copy"><p class="eyebrow">${tonightRating(m)}</p><h2 tabindex="-1" data-r-title>${esc(m.title)}</h2><p class="hint">${m.year||'Год не указан'} · ${m.runtime?`${m.runtime} мин`:'Длительность не указана'}</p><p class="hint">${esc((m.genres||[]).join(' · '))}</p><p>${esc(tonightSynopsis(m))}</p><p class="tonight-reason">✦ ${esc(m.recommendation_reason)}</p><div class="tonight-film-actions"><button class="button" data-r-accept ${r.accepted===m.id||r.busy?'disabled':''}>${r.accepted===m.id?'✓ Выбрано на эту сессию':'Беру этот'}</button><button class="button secondary" data-r-launch>Другой фильм</button><button class="button secondary" data-r-action="watchlist" ${m.saved||r.busy?'disabled':''}>${m.saved?'✓ В списке':'Хочу посмотреть'}</button><button class="button ghost" data-r-action="dislike" ${r.busy?'disabled':''}>Не интересно</button></div><p class="hint">«Беру этот» сохраняет решение в этой вкладке. Просмотренным фильм станет только после вашей отметки.</p></div>`}</article>`:''}</section>`);
+  ${r.spinning&&m?rouletteDraw(m):m?`<article class="roulette-result" aria-busy="${!!r.spinning}"><div class="roulette-poster">${poster(m)}</div><div class="roulette-copy"><p class="eyebrow">${tonightRating(m)}</p><h2 tabindex="-1" data-r-title>${esc(m.title)}</h2><p class="hint">${m.year||'Год не указан'} · ${m.runtime?`${m.runtime} мин`:'Длительность не указана'}</p><p class="hint">${esc((m.genres||[]).join(' · '))}</p><p class="roulette-synopsis">${esc(tonightSynopsis(m))}</p><p class="tonight-reason">✦ ${esc(m.recommendation_reason)}</p><div class="tonight-film-actions"><button class="button" data-r-accept ${r.accepted===m.id||r.busy?'disabled':''}>${r.accepted===m.id?'✓ Выбрано в этой вкладке':'Выбрать в этой вкладке'}</button><button class="button secondary" data-r-launch>Другой фильм</button><button class="button secondary" data-r-action="watchlist" ${m.saved||r.busy?'disabled':''}>${m.saved?'✓ В списке':'Сохранить на потом'}</button><button class="button ghost" data-r-action="dislike" ${r.busy?'disabled':''}>Не интересно</button></div>${m.overview?descriptionDisclosure(m.overview,m.id,'roulette-description'):''}<p class="hint">Выбор сохранится только в этой вкладке рулетки. «Сохранить на потом» добавляет фильм в общий список. Ни одно из этих действий не отмечает просмотр.</p></div></article>`:''}</section>`);
 }
 function finishRoulette(r){
   clearTimeout(r.timer);r.spinning=false;saveRoulette();
@@ -1607,18 +1616,18 @@ async function spinRoulette(){
     if(state.roulette!==r||state.user!==r.user||request!==state.rouletteRequest)return;
     r.settingsOpen=false;r.movie=data.items[0]||null;r.empty=!r.movie;r.watchlistCount=data.watchlist_count;
     if(r.movie){r.seen.push(r.movie.id);r.spinning=true;saveRoulette();
-      const duration=matchMedia('(prefers-reduced-motion: reduce)').matches?0:r.short?180:1800;
+      const duration=matchMedia('(prefers-reduced-motion: reduce)').matches?0:ROULETTE_REVEAL_MS;
       r.timer=setTimeout(()=>finishRoulette(r),duration);
     }
   }catch(e){r.error=e.message;}
-  finally{r.busy=false;if(state.roulette===r&&state.user===r.user&&state.view==='roulette'){render();if(r.spinning)root.querySelector('.roulette-result')?.scrollIntoView({block:'start',behavior:'auto'});}}
+  finally{r.busy=false;if(state.roulette===r&&state.user===r.user&&state.view==='roulette'){render();if(r.spinning)root.querySelector('.roulette-draw')?.scrollIntoView({block:'start',behavior:'auto'});}}
 }
 async function rouletteAction(action){
   const r=state.roulette,m=r?.movie;if(!m||r.busy||r.spinning||state.user!==r.user)return;
   r.busy=true;r.error='';render();
   try{
     await api(`/api/tonight/${r.user}/movies/${encodeURIComponent(m.id)}`,{method:'POST',body:JSON.stringify({action})});
-    if(action==='watchlist')m.saved=true;
+    if(action==='watchlist'){m.saved=true;toast('Добавлено в общий список «На потом»');}
     else{r.movie=null;if(r.accepted===m.id){r.accepted=null;r.acceptedTitle=null;}}
     saveRoulette();
     if(state.user===r.user){state.personal=null;state.tonight=null;state.tinder=null;try{sessionStorage.removeItem(`tonight:mode:${r.user}`);sessionStorage.removeItem(`tonight:tinder:${r.user}`);}catch(_){}}
@@ -1635,12 +1644,9 @@ function bindRoulette(){
   root.querySelectorAll('[data-r-input]').forEach(el=>el.addEventListener('input',()=>{r.filters[el.dataset.rInput]=el.value===''?null:Number(el.value);if(el.dataset.rInput==='min_rating')r.filters.min_rating ||=0;saveRoulette();}));
   root.querySelectorAll('[data-r-genre]').forEach(el=>el.addEventListener('click',()=>{const list=r.filters[el.dataset.rGenre],g=el.dataset.rValue;r.filters[el.dataset.rGenre]=list.includes(g)?list.filter(x=>x!==g):[...list,g];saveRoulette();render();}));
   root.querySelector('[data-r-watched]')?.addEventListener('change',e=>{r.filters.exclude_watched=e.target.checked;saveRoulette();});
-  root.querySelector('[data-r-short]')?.addEventListener('change',e=>{r.short=e.target.checked;saveRoulette();});
   root.querySelectorAll('[data-r-launch]').forEach(el=>el.addEventListener('click',spinRoulette));
-  root.querySelector('[data-r-skip]')?.addEventListener('click',()=>finishRoulette(r));
   root.querySelector('[data-r-accept]')?.addEventListener('click',()=>{r.accepted=r.movie.id;r.acceptedTitle=r.movie.title;saveRoulette();render();});
   root.querySelectorAll('[data-r-action]').forEach(el=>el.addEventListener('click',()=>rouletteAction(el.dataset.rAction)));
-  const img=root.querySelector('.roulette-poster img');if(img){const fail=()=>{img.nextElementSibling.textContent='Постер недоступен';};img.addEventListener('error',fail);if(img.complete&&!img.naturalWidth)fail();}
 }
 
 init();
