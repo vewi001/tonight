@@ -40,6 +40,8 @@ summary:focus-visible { outline:3px solid #ffb066; outline-offset:3px; }
 .history-card .footer-actions { justify-content:flex-start; margin-top:1rem; gap:.4rem; }
 .history-card .button { font-size:.85rem; padding:.7rem 1rem; }
 .poster-placeholder { display:grid; place-items:center; text-align:center; padding:1rem; min-height:96px; color:var(--muted); background:var(--surface-2); border:1px solid var(--line); border-radius:14px; font-size:.8rem; }
+.swipe-guidance { max-width:760px; margin:1rem auto; padding:.85rem 1rem; border-left:3px solid var(--accent); background:var(--surface); border-radius:0 14px 14px 0; font-size:.9rem; line-height:1.6; }
+.swipe-guidance strong { display:block; margin-bottom:.25rem; }
 .tonight-poster:has(.poster-placeholder),.roulette-poster:has(.poster-placeholder) { align-self:start; }
 .tonight-poster .poster-placeholder { min-height:110px; }
 .tonight-film-actions { grid-template-columns:repeat(2,minmax(0,1fr)); }

@@ -386,7 +386,8 @@ function renderSwipe() {
   const progress = state.total - state.deck.length;
   if (!movie) return renderNoAvailableMovies();
   return shell(`<section><div class="progress-line"><div class="track"><i style="width:${(progress/state.total)*100}%"></i></div><strong>${progress + 1} / ${state.total}</strong></div>
-    <div class="swipe-stage"><article class="swipe-card" id="swipe-card" tabindex="0" aria-label="${esc(movie.title)}">
+    <aside class="swipe-guidance" id="swipe-guidance"><strong>Вы уже смотрели этот фильм?</strong> Если да — оцените впечатление от просмотра. Если нет — нажмите «Не смотрел(а)». «Нравится» здесь означает оценку просмотренного фильма, а не желание его посмотреть.</aside>
+    <div class="swipe-stage"><article class="swipe-card" id="swipe-card" tabindex="0" aria-label="${esc(movie.title)}" aria-describedby="swipe-guidance">
       <div class="poster-wrap">${poster(movie)}<div class="poster-shade"></div><div class="poster-copy"><h2>${esc(movie.title)}</h2><div class="meta"><span>${movie.year}</span><span>•</span><span>${movie.genres.join(' · ')}</span><span>•</span><span>${movie.runtime} мин</span></div><p class="card-overview">${esc(movie.overview || 'Описание пока не добавлено')}</p></div></div>
       ${movie.overview ? descriptionDisclosure(movie.overview, movie.id, 'card-description') : ''}
       <div class="reaction-row">${reactionMap.map(([id,e,label]) => `<button class="reaction" data-reaction="${id}" title="${label}">${e}<span>${label}</span></button>`).join('')}</div>
