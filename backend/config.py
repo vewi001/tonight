@@ -50,7 +50,7 @@ class Settings:
     # couple fewer than twenty cards, while allowing a larger personal value.
     swipe_count: int = max(20, int(os.getenv("TONIGHT_SWIPE_COUNT", "20")))
     candidate_count: int = int(os.getenv("TONIGHT_CANDIDATE_COUNT", "7"))
-    tmdb_read_token: str = os.getenv("TMDB_READ_TOKEN", "") or application_token(ASSET_ROOT)
+    tmdb_read_token: str = os.getenv("TMDB_READ_TOKEN", "").strip() or application_token(ASSET_ROOT)
     catalog_auto_update: bool = _env_flag("CATALOG_AUTO_UPDATE", bool(os.getenv("TMDB_READ_TOKEN")))
     catalog_refresh_days: int = int(os.getenv("CATALOG_REFRESH_DAYS", "7"))
     catalog_pages: int = int(os.getenv("CATALOG_PAGES", "25"))

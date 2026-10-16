@@ -1,0 +1,4 @@
+{
+  "purpose": "Public Tonight application key, distributed with the owner authorization. Personal overrides belong in .env.",
+  "token": "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJjMmM2NDBkOTExMGZmYTVkOTI5ZjRlZGMyNWUyMmE0NyIsIm5iZiI6MTc5MDk2NjQ5MC41Niwic3ViIjoiNmFiZmZhZGFiY2NhZTk4MTM5YWExMmIzIiwic2NvcGVzIjpbImFwaV9yZWFkIl0sInZlcnNpb24iOjF9.sBRtSkxGoieXEEcOCTnfMpfYNzv7MW_qFSCkf8KvmyM"
+}

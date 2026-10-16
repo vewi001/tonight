@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from backend.application_token import application_token
 from backend.catalog_bundle import stage_catalog_bundle
 from backend.release import APP_VERSION, create_portable_archive, create_release_archive
 
@@ -97,7 +98,7 @@ def _build(script: str, name: str, stage: Path, work: Path, *, assets: bool = Fa
             f"--add-data={ROOT / 'frontend'}{os.pathsep}frontend",
             f"--add-data={ROOT / 'data' / 'art'}{os.pathsep}assets/art",
         ])
-        token = os.getenv('TMDB_READ_TOKEN', '').strip()
+        token = os.getenv('TMDB_READ_TOKEN', '').strip() or application_token(ROOT)
         if token:
             token_asset = stage / 'app-tmdb.json'
             token_asset.write_text(json.dumps({'token':token}), encoding='utf-8')
