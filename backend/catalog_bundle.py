@@ -43,7 +43,7 @@ def build_catalog_seed(source: Path, destination: Path) -> None:
         # initialize() creates the two normal Tonight profiles. A distributable
         # catalog must contain no people, history, preferences, or sessions.
         for table in (
-            "viewer_movie_actions", "personal_impressions", "participants", "swipes", "swipe_decks", "watch_history", "feedback", "evening_feedback",
+            "tinder_actions", "viewer_movie_actions", "personal_impressions", "participants", "swipes", "swipe_decks", "watch_history", "feedback", "evening_feedback",
             "watchlist", "weekly_picks", "avoid_similar", "taste_genre_exclusions", "taste_profile_resets",
             "sessions", "users", "app_meta",
         ):

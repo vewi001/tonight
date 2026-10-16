@@ -5,7 +5,7 @@ const state = {
   user: localStorage.getItem('tonight:user'),
   accessCode: sessionStorage.getItem('tonight:access-code') || '',
   session: null,
-  tonight: null, tonightRequest: 0,
+  roulette: null, rouletteRequest: 0, tonight: null, tonightRequest: 0, tinder: null, tinderRequest: 0,
   personal: null, personalUser: null, personalAt: 0, personalPending: false, personalError: '', personalRevision: 0,
   setup: null,
   catalog: null, catalogTimer: null, catalogError: '', catalogRequest: 0,
@@ -165,7 +165,7 @@ function render() {
     return;
   }
   const views = {
-    setup: renderSetup, home: renderHome, tonight: renderTonight, vibe: renderVibe, filters: renderFilters,
+    setup: renderSetup, home: renderHome, tonight: renderTonight, roulette: renderRoulette, tinder: renderTinder, vibe: renderVibe, filters: renderFilters,
     swipe: renderSwipe, waiting: renderWaiting, results: renderResults, quick: renderQuick,
     selected: renderSelected, watching:renderWatching, feedback: renderFeedback, eveningFeedback: renderEveningFeedback, history: renderHistory, weekly: renderWeekly, franchises: renderFranchises, diagnostics: renderDiagnostics,
     taste: renderTaste, watchlist: renderWatchlist, search: renderSearch, error: renderError, catalog: renderCatalog,
@@ -298,7 +298,7 @@ function renderHome() {
   else if (s?.status === 'selected') { title = 'Фильм на сегодня выбран'; cta = 'Показать выбор'; }
   else if (s?.participants?.[state.user]?.ready) { title = `Готово, ${names[state.user]}!`; cta = 'Вернуться к ожиданию'; }
   else if (s?.participants?.[state.user]?.energy) { title = 'Продолжим с того же места?'; cta = 'Продолжить выбор'; }
-  return shell(`${catalogExpansionCard()}${tonightEntry()}<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">${esc(s?.title || 'Сегодня')}</p><h1>${title}</h1><p class="lede">Выберите настроение и отметьте знакомые фильмы — дальше ищем вариант, который понравится обоим.</p></div>
+  return shell(`${catalogExpansionCard()}${tonightEntry()}${rouletteEntry()}<section class="tinder-entry"><div><p class="eyebrow">Tonight IQ</p><h2>Кино-Tinder</h2><p>По одному фильму. Вправо — интересно, вверх — уже смотрел.</p></div><button class="button secondary" data-tinder-open>Начать подбор →</button></section><section class="hero-home"><div class="hero-lockup"><p class="eyebrow">${esc(s?.title || 'Сегодня')}</p><h1>${title}</h1><p class="lede">Выберите настроение и отметьте знакомые фильмы — дальше ищем вариант, который понравится обоим.</p></div>
     <div class="panel"><div class="presence" style="margin-bottom:1.5rem">${participantLine('lera')}${participantLine('nikita')}</div><button class="button large" data-action="continue-session">${cta}</button>${s?.status === 'choosing' && !s?.participants?.[state.user]?.energy ? '<button class="button ghost" data-view="quick">⚡ Быстрый вечер</button>' : ''}<p class="hint">${esc(catalogUpdatedText())} · тренды, популярное и классика</p></div>${inviteCard()}
   </section>${personalSection()}`);
 }
@@ -615,6 +615,8 @@ function bindCommon() {
   bindExpansion();
   if (!state.expansion && !state.expansionPending && (!isRemoteClient() || state.accessCode)) refreshExpansion();
   bindTonight();
+  bindRoulette();
+  bindTinder();
   root.querySelectorAll('[data-action="select-personal"]').forEach(el => el.addEventListener('click', () => selectSearchResult(el.dataset.movieId)));
   root.querySelector('[data-action="retry-personal"]')?.addEventListener('click', refreshPersonal);
   bindUpdateButtons();
@@ -1004,8 +1006,9 @@ async function restoreBackup(name) {
 }
 
 function forgetLocalViewer() {
-  try { for(const key of ['lera','nikita']) sessionStorage.removeItem(`tonight:mode:${key}`); } catch (_) {}
-  state.tonight=null;state.tonightRequest++;
+  try { for(const key of ['lera','nikita']) { sessionStorage.removeItem(`tonight:mode:${key}`); sessionStorage.removeItem(`tonight:tinder:${key}`); sessionStorage.removeItem(`tonight:roulette:${key}`); } } catch (_) {}
+  state.roulette=null;state.rouletteRequest++;
+  state.tonight=null;state.tonightRequest++;state.tinder=null;state.tinderRequest++;
   state.user = null;
   state.accessCode = '';
   localStorage.removeItem('tonight:user');
@@ -1428,6 +1431,191 @@ function bindTonight() {
     try {await api(`/api/tonight/${t.user}/movies/${encodeURIComponent(el.dataset.tmId)}`,{method:'POST',body:JSON.stringify({action:el.dataset.tmAction})});const m=t.data.items.find(m=>m.id===el.dataset.tmId);t.actions[m.id]=[...new Set([...(t.actions[m.id] || m.viewer_actions || []),el.dataset.tmAction])];toast('Сохранено');}
     catch(e){toast(e.message);}finally{t.saving=false;saveTonight();if(state.view==='tonight'&&state.tonight===t)render();}
   }));
+}
+
+
+
+// Discovery shares Tonight IQ and its persisted movie statuses.
+function saveTinder() {
+  const t=state.tinder;
+  if(t)try {sessionStorage.setItem(`tonight:tinder:${t.user}`,JSON.stringify(t));}catch(_){}
+}
+function openTinder() {
+  if(!state.user)return;
+  if(state.tinder?.user!==state.user){
+    let saved;try{saved=JSON.parse(sessionStorage.getItem(`tonight:tinder:${state.user}`));}catch(_){}
+    state.tinder=saved?.user===state.user?saved:{user:state.user,queue:[],seen:[],history:[],save:false};
+    state.tinder.busy=false;state.tinder.detail=false;
+  }
+  state.view='tinder';render();
+  if(!state.tinder.queue.length && !state.tinder.loaded)fetchTinder();
+}
+async function fetchTinder(fresh=false) {
+  const t=state.tinder;if(!t || t.busy)return;
+  if(fresh){t.queue=[];t.seen=[];t.history=[];t.pending=null;t.detail=false;}
+  const request=++state.tinderRequest;t.busy=true;t.error='';render();
+  try{
+    const data=await api(`/api/tinder/${t.user}/recommendations`,{method:'POST',body:JSON.stringify({seen_ids:t.seen})});
+    if(request!==state.tinderRequest || state.tinder!==t || state.user!==t.user)return;
+    t.queue=data.items;t.loaded=true;t.cold=data.cold_start;t.catalogAvailable=data.catalog_available;
+    t.seen=[...new Set([...t.seen,...data.items.map(m=>m.id)])];
+  }catch(e){t.error=e.message;}
+  finally{t.busy=false;saveTinder();if(state.view==='tinder'&&state.tinder===t)render();}
+}
+function renderTinder(){
+  const t=state.tinder,m=t?.queue[0];if(!t)return shell('');
+  const disabled=t.busy?'disabled':'';
+  const details=m?`<p class="eyebrow">${tonightRating(m)}</p><h2>${esc(m.title)}</h2><p class="hint">${m.year||'Год не указан'} · ${m.runtime?`${m.runtime} мин`:'Длительность не указана'}</p><p class="hint">${esc((m.genres||[]).join(' · '))}</p>`:'';
+  return shell(`<section class="tinder-mode" aria-busy="${!!t.busy}"><div class="tinder-heading"><div><p class="eyebrow">Tonight IQ · ${esc(names[t.user])}</p><h1>Кино-Tinder</h1></div><button class="button ghost" data-view="home">На главную</button></div>
+    ${t.error?`<p role="alert" class="constraint-warning">${esc(t.error)}</p><button class="button secondary" data-kt-retry>Повторить загрузку</button>`:''}
+    ${t.detail&&m?`<div class="tinder-detail"><button class="button ghost" data-kt-close>← К карточке</button>${details}<p>${esc(m.overview||'Описание отсутствует в каталоге.')}</p><p class="tonight-reason">${esc(m.recommendation_reason)}</p></div>`:m?`
+    <p class="hint tinder-intro">${t.cold?'Знакомимся с вашим вкусом. Начнём с данных каталога.':'По вашим предпочтениям и истории Tonight IQ.'}</p>
+    <article class="tinder-card" data-kt-card tabindex="0" role="button" aria-label="Подробнее: ${esc(m.title)}">
+      <div class="tinder-image"><span class="tinder-image-note" role="status">Загружаем постер…</span><img src="${esc(m.poster_url)}" alt="${m.poster_available?'Постер':'Обложка жанра'}: ${esc(m.title)}" draggable="false"><span class="tinder-direction" aria-hidden="true"></span></div>
+      <div class="tinder-copy">${details}<p>${esc(tonightSynopsis(m))}</p></div>
+    </article><button class="button ghost" data-kt-details>Подробнее о фильме</button>
+    <div class="tinder-controls" aria-label="Действия с фильмом">${[['dislike','←','Не интересно'],['watched','↑','Уже смотрел'],['interest','→','Интересно']].map(([action,icon,label])=>`<button class="button ${action==='interest'?'':'secondary'}" data-kt-action="${action}" ${disabled}><span aria-hidden="true">${icon}</span> ${label}</button>`).join('')}</div>
+    <label class="tinder-save"><input type="checkbox" data-kt-save ${t.save?'checked':''} ${disabled}> «Интересно» также добавляет в «На потом»</label>
+    <p class="hint">← / → / ↑ — действия · Enter — подробности · Z — отмена</p>`:`<div class="empty" role="status"><h2>${t.busy?'Подбираем фильмы…':'Фильмы закончились'}</h2><p>${t.busy?'Tonight IQ учитывает ваш вкус.':t.catalogAvailable===0?'В каталоге нет подтверждённых фильмов. Обновите его в разделе «Каталог».':'Вы просмотрели доступные варианты с учётом предпочтений и истории. Новая сессия может вернуть пропущенные без действия карточки; сохранённые действия учитываются.'}</p></div>`}
+    <div class="footer-actions"><button class="button secondary" data-kt-undo ${!t.history.length||t.busy||t.detail?'disabled':''}>↶ Отменить${t.history.length?' последнее':''}</button><button class="button ghost" data-kt-new ${disabled}>Новая сессия</button></div><p class="sr-only" aria-live="polite">${m?`Следующий фильм: ${esc(m.title)}`:'Нет карточки'}</p></section>`,{narrow:true});
+}
+async function tinderAct(action){
+  const t=state.tinder,m=t?.queue[0];if(!m||t.busy||t.detail||state.user!==t.user)return;
+  // Reuse the request ID after a lost response: the server applies it once.
+  if(t.pending && t.pending.action!==action){toast('Повторите предыдущее действие, чтобы проверить сохранение');return;}
+  t.pending ||= {action,request_id:crypto.randomUUID(),save_watchlist:action==='interest'&&!!t.save};
+  saveTinder();t.busy=true;t.error='';
+  root.querySelectorAll('[data-kt-action], [data-kt-undo], [data-kt-new], [data-kt-save]').forEach(el=>el.disabled=true);
+  try{
+    const result=await api(`/api/tinder/${t.user}/movies/${encodeURIComponent(m.id)}`,{method:'POST',body:JSON.stringify(t.pending)});
+    const card=root.querySelector('[data-kt-card]');
+    if(card&&!matchMedia('(prefers-reduced-motion: reduce)').matches){card.classList.add(`exit-${action}`);await new Promise(resolve=>setTimeout(resolve,180));}
+    t.history.push({id:result.id,movie:m});t.queue.shift();t.pending=null;saveTinder();
+    if(!t.queue.length){t.busy=false;await fetchTinder();}
+  }catch(e){t.error=e.message;}
+  finally{t.busy=false;saveTinder();if(state.view==='tinder'&&state.tinder===t){render();root.querySelector('[data-kt-card]')?.focus({preventScroll:true});}}
+}
+async function tinderUndo(){
+  const t=state.tinder,entry=t?.history.at(-1);if(!entry||t.busy||t.detail)return;
+  t.busy=true;t.error='';render();
+  try{await api(`/api/tinder/${t.user}/undo/${entry.id}`,{method:'POST'});t.history.pop();t.queue=t.queue.filter(m=>m.id!==entry.movie.id);t.queue.unshift(entry.movie);t.pending=null;}
+  catch(e){t.error=e.message;}
+  finally{t.busy=false;saveTinder();if(state.view==='tinder'&&state.tinder===t){render();root.querySelector('[data-kt-card]')?.focus();}}
+}
+function bindTinder(){
+  root.onkeydown=tinderKeydown;
+  root.querySelector('[data-tinder-open]')?.addEventListener('click',openTinder);
+  if(state.view!=='tinder')return;
+  const t=state.tinder;
+  root.querySelector('[data-kt-new]')?.addEventListener('click',()=>fetchTinder(true));
+  root.querySelector('[data-kt-retry]')?.addEventListener('click',()=>t.pending?tinderAct(t.pending.action):fetchTinder());
+  root.querySelector('[data-kt-undo]')?.addEventListener('click',tinderUndo);
+  root.querySelector('[data-kt-save]')?.addEventListener('change',e=>{t.save=e.target.checked;saveTinder();});
+  root.querySelectorAll('[data-kt-action]').forEach(el=>el.addEventListener('click',()=>tinderAct(el.dataset.ktAction)));
+  const open=()=>{if(!t.busy){t.detail=true;render();root.querySelector('[data-kt-close]')?.focus();}};
+  root.querySelector('[data-kt-details]')?.addEventListener('click',open);
+  root.querySelector('[data-kt-close]')?.addEventListener('click',()=>{t.detail=false;render();root.querySelector('[data-kt-card]')?.focus();});
+  const card=root.querySelector('[data-kt-card]');if(!card)return;
+  const img=card.querySelector('img'),note=card.querySelector('.tinder-image-note');
+  const imageReady=()=>{note.textContent=!img.naturalWidth?'Постер недоступен':t.queue[0]?.poster_available?'':'Постер пока не загружен';};
+  img.addEventListener('load',imageReady);img.addEventListener('error',imageReady);if(img.complete)imageReady();
+  let drag=null,suppress=false;
+  card.addEventListener('click',e=>{if(suppress){e.preventDefault();suppress=false;}else open();});
+  card.addEventListener('pointerdown',e=>{if(t.busy||!e.isPrimary||e.button!==0)return;drag={x:e.clientX,y:e.clientY,id:e.pointerId};card.setPointerCapture(e.pointerId);});
+  card.addEventListener('pointermove',e=>{if(!drag||drag.id!==e.pointerId)return;const x=e.clientX-drag.x,y=e.clientY-drag.y;if(Math.hypot(x,y)<10)return;suppress=true;if(y>Math.abs(x)){card.style.transform='';delete card.dataset.direction;card.querySelector('.tinder-direction').textContent='';return;}const action=y<0&&-y>Math.abs(x)?'watched':x>0?'interest':'dislike';card.style.transform=`translate(${x}px,${y}px) rotate(${x/25}deg)`;card.dataset.direction=action;card.querySelector('.tinder-direction').textContent={interest:'Интересно →',dislike:'← Не интересно',watched:'↑ Уже смотрел'}[action];});
+  const reset=()=>{drag=null;card.style.transform='';delete card.dataset.direction;card.querySelector('.tinder-direction').textContent='';};
+  card.addEventListener('pointerup',e=>{if(!drag||drag.id!==e.pointerId)return;const x=e.clientX-drag.x,y=e.clientY-drag.y;reset();if(Math.abs(x)>85||y< -85){suppress=true;tinderAct(y< -85&&-y>Math.abs(x)?'watched':x>0?'interest':'dislike');}setTimeout(()=>{suppress=false;},0);});
+  card.addEventListener('pointercancel',e=>{if(drag?.id===e.pointerId){reset();suppress=false;}});
+  card.addEventListener('lostpointercapture',()=>{if(drag)reset();});
+}
+function tinderKeydown(e){
+  if(state.view!=='tinder'||state.tinder?.busy||e.repeat||e.altKey||e.ctrlKey||e.metaKey||document.querySelector('.modal-backdrop')||e.target.closest('input,select,textarea,[contenteditable="true"]'))return;
+  if(state.tinder.detail){if(e.key==='Escape'){e.preventDefault();root.querySelector('[data-kt-close]')?.click();}return;}
+  const action={ArrowLeft:'dislike',ArrowRight:'interest',ArrowUp:'watched'}[e.key];
+  if(action){e.preventDefault();tinderAct(action);}else if(e.key.toLowerCase()==='z'){e.preventDefault();tinderUndo();}
+  else if(e.key==='Enter'&&e.target.matches('[data-kt-card]')){e.preventDefault();root.querySelector('[data-kt-details]')?.click();}
+}
+
+
+// One real IQ result is chosen before its poster is animated.
+function rouletteEntry(){
+  return `<section class="tinder-entry"><div><p class="eyebrow">Tonight IQ · один фильм на вечер</p><h2>Кинорулетка</h2><p>Доверьте выбор своему вкусу. Или позвольте себе удивиться.</p></div><button class="button large" data-roulette-open>Реши за меня 🎲</button></section>`;
+}
+function saveRoulette(){
+  const r=state.roulette;if(!r)return;
+  try{sessionStorage.setItem(`tonight:roulette:${r.user}`,JSON.stringify({user:r.user,filters:r.filters,seen:r.seen,accepted:r.accepted,acceptedTitle:r.acceptedTitle,short:r.short}));}catch(_){}
+}
+function openRoulette(){
+  if(!state.user)return;
+  if(state.roulette?.user!==state.user){
+    let saved;try{saved=JSON.parse(sessionStorage.getItem(`tonight:roulette:${state.user}`));}catch(_){}
+    state.roulette=saved?.user===state.user?saved:{user:state.user,filters:{mode:'smart',max_runtime:null,min_rating:0,min_year:null,max_year:null,included_genres:[],excluded_genres:[],exclude_watched:true},seen:[],accepted:null,short:false};
+    state.roulette.busy=false;
+  }
+  state.view='roulette';render();
+}
+function renderRoulette(){
+  const r=state.roulette;if(!r||r.user!==state.user)return renderHome();
+  const f=r.filters,m=r.movie,locked=r.busy||r.spinning;
+  const genreChoices=(key,label)=>`<fieldset><legend>${label}</legend><div class="chip-grid">${[...new Set([...genres,'семейный','приключения','криминал','история','музыка','военный','вестерн'])].map(g=>`<button class="chip ${f[key].includes(g)?'selected':''}" data-r-genre="${key}" data-r-value="${esc(g)}" aria-pressed="${f[key].includes(g)}">${esc(g)}</button>`).join('')}</div></fieldset>`;
+  return shell(`<section class="roulette-mode"><div class="tinder-heading"><div><p class="eyebrow">Tonight IQ · ${esc(names[r.user])}</p><h1>Кинорулетка</h1></div><button class="button ghost" data-view="home">На главную</button></div>
+  <fieldset class="roulette-settings" ${locked?'disabled':''}><legend>Как выбираем?</legend><div class="tonight-choices">${[['smart','Умный выбор','Больше веса вашему вкусу'],['surprise','Полная неожиданность','Больше шансов новым жанрам'],['watchlist','Из моего списка','Только из «На потом»']].map(([id,title,desc])=>`<button class="choice ${f.mode===id?'selected':''}" data-r-mode="${id}" aria-pressed="${f.mode===id}"><strong>${title}</strong><small>${desc}</small></button>`).join('')}</div>
+  <details class="roulette-filters" ${r.filtersOpen?'open':''}><summary>Быстрые ограничения</summary><p class="hint">Применяем вместе с сохранёнными ограничениями профиля. Автоматически ничего не ослабляем.</p><div class="roulette-inputs">${[['max_runtime','Максимум минут',1,1440],['min_rating','Минимальный рейтинг',0,10],['min_year','Год от',1888,2100],['max_year','Год до',1888,2100]].map(([key,label,min,max])=>`<label>${label}<input type="number" data-r-input="${key}" min="${min}" max="${max}" step="${key==='min_rating'?'.1':'1'}" value="${f[key]??''}" placeholder="Неважно"></label>`).join('')}</div>${genreChoices('included_genres','Жанры: хотя бы один из выбранных')}${genreChoices('excluded_genres','Исключить жанры')}<label class="tonight-check"><input type="checkbox" data-r-watched ${f.exclude_watched?'checked':''}> Исключить уже просмотренные</label></details>
+  <label class="tonight-check"><input type="checkbox" data-r-short ${r.short?'checked':''}> Короткая анимация</label></fieldset>
+  <p class="hint">Скрытые и нежелательные фильмы исключены во всех режимах.</p>${r.acceptedTitle&&r.accepted!==m?.id?`<p class="tonight-reason">Ваш выбор в этой сессии: ${esc(r.acceptedTitle)}</p>`:''}
+  <button class="button large roulette-launch" data-r-launch ${locked?'disabled':''}>${r.busy?'Tonight IQ подбирает…':'Реши за меня'}</button>
+  ${r.error?`<p class="error" role="alert">${esc(r.error)}</p>`:''}
+  ${r.empty?`<div class="empty" role="status"><h2>${r.watchlistCount===0?'В списке пока пусто':'Подходящие фильмы закончились'}</h2><p>${r.watchlistCount===0?'Добавьте фильмы в «На потом» или выберите другой режим.':'Измените быстрые ограничения или сохранённые ограничения профиля. Уже предложенные в этой сессии фильмы исключены; ограничения сохранены.'}</p></div>`:''}
+  ${m?`<article class="roulette-result ${r.spinning?'is-spinning':''}" aria-busy="${!!r.spinning}"><div class="roulette-poster"><img src="${esc(m.poster_url)}" alt="${m.poster_available?'Постер':'Жанровая обложка'}: ${esc(m.title)}"><span class="tonight-poster-note">${m.poster_available?'':'Постер пока не загружен'}</span>${r.spinning?'<div class="roulette-orbit" aria-hidden="true">✦</div>':''}</div>${r.spinning?`<div><p role="status">Один фильм для вашего вечера…</p><button class="button secondary" data-r-skip>Пропустить анимацию</button></div>`:`<div class="roulette-copy"><p class="eyebrow">${tonightRating(m)}</p><h2 tabindex="-1" data-r-title>${esc(m.title)}</h2><p class="hint">${m.year||'Год не указан'} · ${m.runtime?`${m.runtime} мин`:'Длительность не указана'}</p><p class="hint">${esc((m.genres||[]).join(' · '))}</p><p>${esc(tonightSynopsis(m))}</p><p class="tonight-reason">✦ ${esc(m.recommendation_reason)}</p><div class="tonight-film-actions"><button class="button" data-r-accept ${r.accepted===m.id||r.busy?'disabled':''}>${r.accepted===m.id?'✓ Выбрано на эту сессию':'Беру этот'}</button><button class="button secondary" data-r-launch>Другой фильм</button><button class="button secondary" data-r-action="watchlist" ${m.saved||r.busy?'disabled':''}>${m.saved?'✓ В списке':'Хочу посмотреть'}</button><button class="button ghost" data-r-action="dislike" ${r.busy?'disabled':''}>Не интересно</button></div><p class="hint">«Беру этот» сохраняет решение в этой вкладке. Просмотренным фильм станет только после вашей отметки.</p></div>`}</article>`:''}</section>`);
+}
+function finishRoulette(r){
+  clearTimeout(r.timer);r.spinning=false;saveRoulette();
+  if(state.roulette===r&&state.user===r.user&&state.view==='roulette'){render();root.querySelector('[data-r-title]')?.focus({preventScroll:true});}
+}
+async function spinRoulette(){
+  const r=state.roulette;if(!r||r.busy||r.spinning)return;
+  const inputs=[...root.querySelectorAll('[data-r-input]')];
+  if(inputs.some(el=>!el.reportValidity()))return;
+  if(r.filters.min_year&&r.filters.max_year&&r.filters.min_year>r.filters.max_year){r.error='Начальный год должен быть не позже конечного';render();return;}
+  r.busy=true;r.error='';r.empty=false;const request=++state.rouletteRequest;render();
+  try{
+    const data=await api(`/api/roulette/${r.user}/pick`,{method:'POST',body:JSON.stringify({...r.filters,seen_ids:r.seen})});
+    if(state.roulette!==r||state.user!==r.user||request!==state.rouletteRequest)return;
+    r.movie=data.items[0]||null;r.empty=!r.movie;r.watchlistCount=data.watchlist_count;
+    if(r.movie){r.seen.push(r.movie.id);r.spinning=true;saveRoulette();
+      const duration=matchMedia('(prefers-reduced-motion: reduce)').matches?0:r.short?180:1800;
+      r.timer=setTimeout(()=>finishRoulette(r),duration);
+    }
+  }catch(e){r.error=e.message;}
+  finally{r.busy=false;if(state.roulette===r&&state.user===r.user&&state.view==='roulette'){render();if(r.spinning)root.querySelector('.roulette-result')?.scrollIntoView({block:'start',behavior:'auto'});}}
+}
+async function rouletteAction(action){
+  const r=state.roulette,m=r?.movie;if(!m||r.busy||r.spinning||state.user!==r.user)return;
+  r.busy=true;r.error='';render();
+  try{
+    await api(`/api/tonight/${r.user}/movies/${encodeURIComponent(m.id)}`,{method:'POST',body:JSON.stringify({action})});
+    if(action==='watchlist')m.saved=true;
+    else{r.movie=null;if(r.accepted===m.id){r.accepted=null;r.acceptedTitle=null;}}
+    saveRoulette();
+    if(state.user===r.user){state.personal=null;state.tonight=null;state.tinder=null;try{sessionStorage.removeItem(`tonight:mode:${r.user}`);sessionStorage.removeItem(`tonight:tinder:${r.user}`);}catch(_){}}
+  }catch(e){r.error=e.message;}
+  finally{r.busy=false;if(state.roulette===r&&state.user===r.user&&state.view==='roulette')render();}
+}
+function bindRoulette(){
+  root.querySelector('[data-roulette-open]')?.addEventListener('click',openRoulette);
+  if(state.view!=='roulette')return;
+  const r=state.roulette;
+  root.querySelector('.roulette-filters')?.addEventListener('toggle',e=>{r.filtersOpen=e.target.open;});
+  root.querySelectorAll('[data-r-mode]').forEach(el=>el.addEventListener('click',()=>{r.filters.mode=el.dataset.rMode;saveRoulette();render();}));
+  root.querySelectorAll('[data-r-input]').forEach(el=>el.addEventListener('input',()=>{r.filters[el.dataset.rInput]=el.value===''?null:Number(el.value);if(el.dataset.rInput==='min_rating')r.filters.min_rating ||=0;saveRoulette();}));
+  root.querySelectorAll('[data-r-genre]').forEach(el=>el.addEventListener('click',()=>{const list=r.filters[el.dataset.rGenre],g=el.dataset.rValue;r.filters[el.dataset.rGenre]=list.includes(g)?list.filter(x=>x!==g):[...list,g];saveRoulette();render();}));
+  root.querySelector('[data-r-watched]')?.addEventListener('change',e=>{r.filters.exclude_watched=e.target.checked;saveRoulette();});
+  root.querySelector('[data-r-short]')?.addEventListener('change',e=>{r.short=e.target.checked;saveRoulette();});
+  root.querySelectorAll('[data-r-launch]').forEach(el=>el.addEventListener('click',spinRoulette));
+  root.querySelector('[data-r-skip]')?.addEventListener('click',()=>finishRoulette(r));
+  root.querySelector('[data-r-accept]')?.addEventListener('click',()=>{r.accepted=r.movie.id;r.acceptedTitle=r.movie.title;saveRoulette();render();});
+  root.querySelectorAll('[data-r-action]').forEach(el=>el.addEventListener('click',()=>rouletteAction(el.dataset.rAction)));
+  const img=root.querySelector('.roulette-poster img');if(img){const fail=()=>{img.nextElementSibling.textContent='Постер недоступен';};img.addEventListener('error',fail);if(img.complete&&!img.naturalWidth)fail();}
 }
 
 init();

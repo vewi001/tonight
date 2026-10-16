@@ -7,7 +7,7 @@ from backend.database.db import connect, db_session
 
 
 PERSONAL_TABLES = (
-    "viewer_movie_actions", "personal_impressions",
+    "tinder_actions", "viewer_movie_actions", "personal_impressions",
     "feedback",
     "evening_feedback",
     "watch_history",

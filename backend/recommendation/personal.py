@@ -34,7 +34,7 @@ def features(movie: dict) -> dict[str, set[str]]:
 def rank_movies(catalog: list[dict], signals: list[dict], *, excluded: set[str] | None = None,
                 blocked_genres: set[str] | None = None, desired: set[str] | None = None,
                 rules: list[dict] | None = None, exposure: dict[str, int] | None = None,
-                min_year: int | None = None, max_runtime: int | None = None, limit: int = 6) -> list[dict]:
+                min_year: int | None = None, max_runtime: int | None = None, limit: int = 6, diversify: bool = True) -> list[dict]:
     """Pure weighted ranking followed by a bounded greedy diversity pass."""
     points = {key: defaultdict(list) for key in WEIGHTS}
     for signal in signals:
@@ -90,6 +90,8 @@ def rank_movies(catalog: list[dict], signals: list[dict], *, excluded: set[str] 
             reason = 'Вариант для знакомства: пока недостаточно данных для личного совпадения.'
         ranked.append({**movie, 'recommendation_score': round(score, 6), 'personalized': personalized,
                        'recommendation_reason': reason, 'ranking_factors': contributions})
+    if not diversify:
+        return sorted(ranked, key=lambda m: (-m['recommendation_score'], m['id']))[:limit]
     # Limit the quadratic reranking to a small pool. Deterministic ties use ID.
     pool = sorted(ranked, key=lambda m: (-m['recommendation_score'], m['id']))[:max(120, limit * 10)]
     chosen, genre_counts, franchises = [], defaultdict(int), set()
@@ -109,7 +111,7 @@ def rank_movies(catalog: list[dict], signals: list[dict], *, excluded: set[str] 
     return chosen
 
 
-def personal_recommendations(user_id: str, limit: int = 6, reference_day: date | None = None, *, tonight: dict | None = None) -> dict[str, Any]:
+def personal_recommendations(user_id: str, limit: int = 6, reference_day: date | None = None, *, tonight: dict | None = None, tinder_seen: list[str] | None = None, roulette: dict | None = None) -> dict[str, Any]:
     day = reference_day or date.today()
     with db_session() as db:
         signals = taste_signals(db, user_id)
@@ -130,6 +132,9 @@ def personal_recommendations(user_id: str, limit: int = 6, reference_day: date |
         excluded = (watched if tonight is None or tonight['exclude_watched'] else set()) | {mid for mid, action in marks.items() if 'dislike' in action} | {r['movie_id'] for r in rules}
         excluded.update(r['movie_id'] for r in companion_marks if r['action'] == 'dislike')
         excluded.update(s['movie_id'] for s in signals if s['value'] < 0)
+        if tinder_seen is not None:
+            excluded.update(tinder_seen)
+            excluded.update(r[0] for r in db.execute('SELECT DISTINCT movie_id FROM tinder_actions WHERE user_id=? AND undone=0', (user_id,)))
         for row in db.execute('SELECT rejected_movies,selected_movie_id,status FROM sessions'):
             excluded.update(loads(row['rejected_movies'], []))
             if row['status'] in {'selected', 'watching'}:
@@ -162,10 +167,10 @@ def personal_recommendations(user_id: str, limit: int = 6, reference_day: date |
         catalog_available = len(eligible)
         if tonight is not None:
             excluded.update(tonight['seen_ids'])
-            blocked = set(tonight['excluded_genres'])
-            desired = MOOD_GENRES.get(tonight['mood'], set())
+            blocked = (blocked if roulette is not None else set()) | set(tonight['excluded_genres'])
+            desired = desired if roulette is not None else MOOD_GENRES.get(tonight['mood'], set())
             checks = [
-                ('mood', 'настроение', lambda m: not desired or bool(set(m['genres']) & desired)),
+                ('mood', 'настроение', lambda m: roulette is not None or not desired or bool(set(m['genres']) & desired)),
                 ('max_runtime', 'продолжительность (фильмы без длительности тоже исключены)', lambda m: not tonight['max_runtime'] or bool(m.get('runtime') and m['runtime'] <= tonight['max_runtime'])),
                 ('min_rating', 'минимальный рейтинг (без оценки фильмы исключены)', lambda m: not tonight['min_rating'] or bool(m.get('rating') is not None and m['rating'] >= tonight['min_rating'])),
                 ('year', 'диапазон лет', lambda m: bool(m.get('year')) and (not tonight['min_year'] or m['year'] >= tonight['min_year']) and (not tonight['max_year'] or m['year'] <= tonight['max_year'])),
@@ -179,9 +184,26 @@ def personal_recommendations(user_id: str, limit: int = 6, reference_day: date |
                     count = sum(all(other(m) for otherkey, _, other in checks if otherkey != key) for m in base)
                     if count > len(eligible):
                         diagnostics.append({'field': key, 'label': label, 'available': count})
+        watchlist_count = None
+        if roulette is not None:
+            # Intersect quick controls with the existing saved hard preferences.
+            if prefs:
+                eligible = [m for m in eligible if
+                            (not prefs['min_year'] or m.get('year') and m['year'] >= prefs['min_year']) and
+                            (not prefs['max_runtime'] or m.get('runtime') and m['runtime'] <= prefs['max_runtime'])]
+            wanted = set(roulette['included_genres'])
+            eligible = [m for m in eligible if not wanted or set(m['genres']) & wanted]
+            if roulette['mode'] == 'watchlist':
+                saved_ids = {r[0] for r in db.execute('SELECT movie_id FROM watchlist')}
+                watchlist_count = len(saved_ids)
+                eligible = [m for m in eligible if m['id'] in saved_ids]
         items = rank_movies(eligible, signals, excluded=excluded, blocked_genres=blocked, desired=desired,
                             rules=rules, exposure=exposure, min_year=prefs['min_year'] if prefs and tonight is None else None,
-                            max_runtime=prefs['max_runtime'] if prefs and tonight is None else None, limit=limit)
+                            max_runtime=prefs['max_runtime'] if prefs and tonight is None else None, limit=len(eligible) if roulette is not None else limit, diversify=roulette is None)
+        candidate_count = len(items)
+        if roulette is not None and items:
+            from backend.recommendation.roulette import weighted_pick
+            items = [weighted_pick(items, roulette['mode'])]
         by_id = {row['id']: row for row in rows}
         items = [{**row_to_movie(by_id[item['id']]), **{key: item[key] for key in
                   ('recommendation_score', 'personalized', 'recommendation_reason', 'ranking_factors')}} for item in items]
@@ -194,6 +216,6 @@ def personal_recommendations(user_id: str, limit: int = 6, reference_day: date |
         db.execute('DELETE FROM personal_impressions WHERE day<?', ((day - timedelta(days=7)).isoformat(),))
         db.executemany('INSERT OR IGNORE INTO personal_impressions(user_id,movie_id,day) VALUES(?,?,?)',
                        [(user_id, m['id'], day.isoformat()) for m in items])
-    return {'items': items, 'cold_start': not any(s['value'] for s in signals) and (tonight is not None or not desired),
+    return {'items': items, 'candidate_count': candidate_count, 'watchlist_count': watchlist_count, 'cold_start': not any(s['value'] for s in signals) and (tonight is not None or not desired),
             'limited': len(items) < limit, 'relaxations': diagnostics, 'catalog_available': catalog_available,
             'exhausted': bool(tonight and tonight['seen_ids'] and len(items) < limit)}

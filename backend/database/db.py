@@ -214,10 +214,21 @@ CREATE TABLE IF NOT EXISTS taste_profile_resets (
 CREATE TABLE IF NOT EXISTS viewer_movie_actions (
     user_id TEXT NOT NULL REFERENCES users(id),
     movie_id TEXT NOT NULL REFERENCES movies(id),
-    action TEXT NOT NULL CHECK(action IN ('watched','dislike')),
+    action TEXT NOT NULL CHECK(action IN ('watched','dislike','interest')),
     created_at TEXT NOT NULL,
     PRIMARY KEY(user_id,movie_id,action)
 );
+CREATE TABLE IF NOT EXISTS tinder_actions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    movie_id TEXT NOT NULL REFERENCES movies(id) ON DELETE CASCADE,
+    action TEXT NOT NULL CHECK(action IN ('interest','dislike','watched')),
+    before_state TEXT NOT NULL,
+    after_state TEXT NOT NULL,
+    undone INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tinder_user ON tinder_actions(user_id,created_at);
 CREATE TABLE IF NOT EXISTS personal_impressions (
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     movie_id TEXT NOT NULL REFERENCES movies(id) ON DELETE CASCADE,
@@ -279,6 +290,15 @@ def initialize(path: Path | None = None) -> None:
         for column, definition in migrations.items():
             if column not in movie_columns:
                 db.execute(f"ALTER TABLE movies ADD COLUMN {column} {definition}")
+        action_sql = db.execute("SELECT sql FROM sqlite_master WHERE name='viewer_movie_actions'").fetchone()[0]
+        if "'interest'" not in action_sql:
+            db.execute("ALTER TABLE viewer_movie_actions RENAME TO viewer_movie_actions_old")
+            db.execute("""CREATE TABLE viewer_movie_actions (
+                user_id TEXT NOT NULL REFERENCES users(id), movie_id TEXT NOT NULL REFERENCES movies(id),
+                action TEXT NOT NULL CHECK(action IN ('watched','dislike','interest')),
+                created_at TEXT NOT NULL, PRIMARY KEY(user_id,movie_id,action))""")
+            db.execute("INSERT INTO viewer_movie_actions SELECT * FROM viewer_movie_actions_old")
+            db.execute("DROP TABLE viewer_movie_actions_old")
         watchlist_columns = {row["name"] for row in db.execute("PRAGMA table_info(watchlist)").fetchall()}
         if "saved_by" not in watchlist_columns:
             db.execute("ALTER TABLE watchlist ADD COLUMN saved_by TEXT")

@@ -777,6 +777,55 @@ async def get_personal_recommendations(user_id: str) -> dict:
     return await asyncio.to_thread(personal_recommendations, user_id)
 
 
+class TinderDeckIn(BaseModel):
+    seen_ids: list[str] = Field(default_factory=list, max_length=20000)
+
+
+class TinderActionIn(BaseModel):
+    action: Literal['interest','dislike','watched']
+    request_id: str = Field(min_length=16, max_length=80, pattern=r'^[a-zA-Z0-9-]+$')
+    save_watchlist: bool = False
+
+    @model_validator(mode='after')
+    def valid_save(self):
+        if self.save_watchlist and self.action != 'interest':
+            raise ValueError('Список «На потом» доступен для интересного фильма')
+        return self
+
+
+@app.post('/api/tinder/{user_id}/recommendations')
+async def tinder_deck(user_id: str, payload: TinderDeckIn) -> dict:
+    if user_id not in {'lera','nikita'}:
+        raise HTTPException(400, 'Неизвестный пользователь')
+    return await asyncio.to_thread(personal_recommendations, user_id, 12, tinder_seen=payload.seen_ids)
+
+
+@app.post('/api/tinder/{user_id}/movies/{movie_id}')
+async def tinder_action(user_id: str, movie_id: str, payload: TinderActionIn) -> dict:
+    from backend.recommendation.tinder import act, ActionConflict
+    if user_id not in {'lera','nikita'}:
+        raise HTTPException(400, 'Неизвестный пользователь')
+    try:
+        return await asyncio.to_thread(act, user_id, movie_id, payload.action, payload.request_id, payload.save_watchlist)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ActionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post('/api/tinder/{user_id}/undo/{action_id}')
+async def tinder_undo(user_id: str, action_id: str) -> dict:
+    from backend.recommendation.tinder import undo, ActionConflict
+    if user_id not in {'lera','nikita'}:
+        raise HTTPException(400, 'Неизвестный пользователь')
+    try:
+        return await asyncio.to_thread(undo, user_id, action_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ActionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 class TonightModeIn(BaseModel):
     mood: Literal['laugh','scary','cozy','wow','smart','atmosphere','surprise'] = 'surprise'
     max_runtime: Literal[90,120,150] | None = None
@@ -794,6 +843,28 @@ class TonightModeIn(BaseModel):
             raise ValueError('Начальный год должен быть не позже конечного')
         self.excluded_genres = normalize_genres(self.excluded_genres)
         return self
+
+
+class RouletteIn(TonightModeIn):
+    mode: Literal['smart', 'surprise', 'watchlist'] = 'smart'
+    max_runtime: int | None = Field(default=None, ge=1, le=1440)
+    included_genres: list[str] = Field(default_factory=list, max_length=40)
+    # Roulette always uses the current viewer and their saved mood as a soft signal.
+    company: Literal['solo'] = 'solo'
+    mood: Literal['surprise'] = 'surprise'
+
+    @model_validator(mode='after')
+    def valid_genres(self):
+        self.included_genres = normalize_genres(self.included_genres)
+        return self
+
+
+@app.post('/api/roulette/{user_id}/pick')
+async def roulette_pick(user_id: str, payload: RouletteIn) -> dict:
+    if user_id not in {'lera', 'nikita'}:
+        raise HTTPException(400, 'Неизвестный пользователь')
+    return await asyncio.to_thread(personal_recommendations, user_id, 1,
+                                   tonight=payload.model_dump(), roulette=payload.model_dump())
 
 
 class TonightActionIn(BaseModel):

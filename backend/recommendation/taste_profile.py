@@ -25,10 +25,10 @@ def taste_signals(db: Any, user_id: str, session_id: int | None = None) -> list[
     for row in db.execute(query, args):
         if row['reaction'] in values:
             evidence[row['movie_id']] = (dict(row), values[row['reaction']])
-    # Explicit disinterest uses the same IQ evidence and respects a taste reset.
+    # Discovery interest is deliberately weaker than a rating; later marks win.
     reset = db.execute('SELECT reset_at FROM taste_profile_resets WHERE user_id=?', (user_id,)).fetchone()
-    for row in db.execute("SELECT a.movie_id,m.* FROM viewer_movie_actions a JOIN movies m ON m.id=a.movie_id WHERE a.user_id=? AND a.action='dislike' AND a.created_at>?", (user_id, reset['reset_at'] if reset else '')):
-        evidence[row['movie_id']] = (dict(row), -1.)
+    for row in db.execute("SELECT a.movie_id,a.action,m.* FROM viewer_movie_actions a JOIN movies m ON m.id=a.movie_id WHERE a.user_id=? AND a.action IN ('dislike','interest') AND a.created_at>? ORDER BY a.created_at,a.rowid", (user_id, reset['reset_at'] if reset else '')):
+        evidence[row['movie_id']] = (dict(row), -1. if row['action'] == 'dislike' else .3)
     for row in db.execute(
         """SELECT h.movie_id,f.rating,m.* FROM feedback f JOIN watch_history h ON h.id=f.history_id
         JOIN movies m ON m.id=h.movie_id WHERE f.user_id=? AND f.rowid>?
