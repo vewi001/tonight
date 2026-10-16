@@ -29,7 +29,7 @@ sandbox.location.hostname='192.168.1.20';
 assert.equal(vm.runInContext('catalogPanel()',sandbox),'');
 assert(!vm.runInContext('shell("test")',sandbox).includes('data-view="catalog"'));
 sandbox.location.hostname='localhost';
-assert(vm.runInContext('shell("test")',sandbox).includes('data-view="catalog"'));
+assert(vm.runInContext('shell("test")',sandbox).includes('data-view="library"'));
 vm.runInContext(`state.update={phase:'available',available_version:'1.6.6',install_supported:true}`,sandbox);
 assert(vm.runInContext('updateControls(true)',sandbox).includes('Обновить приложение'));
 '''

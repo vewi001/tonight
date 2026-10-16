@@ -12,7 +12,7 @@ const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const storage={getItem:()=>null,setItem:()=>{},removeItem:()=>{}};
 const root={querySelector:()=>null,querySelectorAll:()=>[]};
 const sandbox={document:{querySelector:s=>s==='#app'?root:null},localStorage:storage,sessionStorage:storage,
- location:{hostname:'localhost'},setTimeout,clearTimeout,crypto:{randomUUID:()=> 'test-request-unique'},
+ location:{hostname:'localhost'},setTimeout,clearTimeout,crypto:{getRandomValues:bytes=>{for(let i=0;i<bytes.length;i++)bytes[i]=i+1;return bytes;}},
  matchMedia:()=>({matches:true})};
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync('frontend/app.js','utf8').replace(/\ninit\(\);\s*$/,''),sandbox);
@@ -25,11 +25,16 @@ api=async(path,options)=>{calls.push({path,body:options.body&&JSON.parse(options
  assert.equal(vm.runInContext('state.tinder.queue[0].id',sandbox),'a');
  await vm.runInContext(`tinderAct('interest')`,sandbox);
  assert.equal(vm.runInContext('calls[0].body.request_id===calls[1].body.request_id',sandbox),true);
+ assert.match(vm.runInContext('calls[0].body.request_id',sandbox),/^[a-f0-9]{32}$/);
  assert.equal(vm.runInContext('state.tinder.queue[0].id',sandbox),'b');
  assert.equal(vm.runInContext('state.tinder.history.length',sandbox),1);
  await vm.runInContext('tinderUndo()',sandbox);
  assert.equal(vm.runInContext('state.tinder.queue[0].id',sandbox),'a');
  assert.equal(vm.runInContext('state.tinder.history.length',sandbox),0);
+ sandbox.crypto.getRandomValues=()=>{throw Error('random unavailable');};
+ await vm.runInContext(`tinderAct('dislike')`,sandbox);
+ assert.equal(vm.runInContext('state.tinder.busy',sandbox),false);
+ assert.equal(vm.runInContext('state.tinder.error',sandbox),'random unavailable');
  vm.runInContext(`let chosen=[];tinderAct=a=>chosen.push(a);tinderUndo=()=>chosen.push('undo');`,sandbox);
  sandbox.ignored={key:'ArrowRight',target:{closest:()=>true},preventDefault:()=>{throw Error('input intercepted');}};
  vm.runInContext('tinderKeydown(ignored)',sandbox);

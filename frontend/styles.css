@@ -358,8 +358,8 @@ details[open]>summary .description-collapse { display:inline; }
 .tinder-entry{border:1px solid var(--border, #37303f);border-radius:24px;padding:24px;margin:20px 0}
 .tinder-entry h2{font-size:28px;margin:4px 0}.tinder-heading h1{font-size:36px;margin:4px 0}.tinder-heading>div{min-width:0}.tinder-heading>.button{flex-shrink:0;white-space:nowrap}.tinder-detail h2,.tinder-mode .empty h2{font-size:30px}.tinder-mode{text-align:center;max-width:620px;margin:auto}
 .tinder-heading{text-align:left}.tinder-intro{margin:14px 0}
-.tinder-card{max-width:380px;margin:0 auto;overflow:hidden;border-radius:24px;border:1px solid #4b3c52;background:#17121e;text-align:left;touch-action:none;cursor:pointer;animation:tinder-in .25s ease-out;transition:transform .18s ease-out,opacity .18s}
-.tinder-card:focus-visible{outline:3px solid #ffbd59;outline-offset:4px}.tinder-image{height:clamp(220px,40vh,410px);position:relative;background:#211a2b}
+.tinder-card{max-width:380px;margin:0 auto;overflow:hidden;border-radius:24px;border:1px solid #4b3c52;background:#17121e;text-align:left;touch-action:pan-y;cursor:pointer;animation:tinder-in .25s ease-out;transition:transform .18s ease-out,opacity .18s}
+.tinder-card:focus-visible{outline:3px solid #ffbd59;outline-offset:4px}.tinder-image{height:clamp(220px,40vh,410px);position:relative;background:#211a2b;touch-action:none}
 .tinder-image img{height:100%;width:100%;object-fit:cover;position:relative;pointer-events:none}.tinder-image-note{position:absolute;inset:auto 8px 8px;z-index:1;text-align:center;background:#17121ee8;border-radius:8px;font-size:12px;color:#eee}
 .tinder-image-note:empty{display:none}.tinder-copy{padding:16px 20px}.tinder-copy h2{font-size:24px;margin:6px 0}.tinder-copy p{margin:6px 0;font-size:14px}
 .tinder-direction{position:absolute;inset:24px 10px auto;z-index:2;text-align:center;font-weight:800;font-size:24px;text-shadow:0 2px 5px #000;color:#fff;background:#23182de6;border-radius:12px}
@@ -379,3 +379,25 @@ details[open]>summary .description-collapse { display:inline; }
 .roulette-filters fieldset{border:0;padding:0;margin:1.25rem 0;min-width:0}.roulette-settings .choice strong{flex:0;text-align:center}.roulette-settings .choice small{color:var(--muted);font-size:.85rem}.roulette-inputs input{background:#211a2b;border:1px solid #4b3c52;border-radius:12px;padding:.8rem;color:inherit;font:inherit}
 
 .roulette-mode .tonight-choices{grid-template-columns:repeat(3,minmax(0,1fr))}.roulette-mode .tonight-check{display:flex;align-items:center;gap:.7rem;margin:1rem 0}.roulette-copy h2{font-size:clamp(1.8rem,3vw,2.7rem);margin-bottom:1rem}.roulette-copy .hint{text-align:left}.roulette-copy .tonight-film-actions{grid-template-columns:repeat(2,minmax(0,1fr))}@media(max-width:600px){.roulette-mode .tonight-choices,.roulette-copy .tonight-film-actions{grid-template-columns:1fr}}
+
+/* Keep movie actions within reach on a phone, including short landscape screens. */
+@media(max-width:600px){
+  .tinder-mode .tinder-heading{gap:8px;margin-bottom:12px}
+  .tinder-mode .tinder-heading h1{font-size:26px}
+  .tinder-mode .tinder-heading .eyebrow{font-size:10px;letter-spacing:.1em}
+  .tinder-intro{display:none}
+  .tinder-image{height:clamp(140px,25svh,210px)}
+  .tinder-card{max-width:360px;border-radius:18px}
+  .tinder-copy{padding:10px 14px}
+  .tinder-copy h2{font-size:20px;line-height:1.2}
+  .tinder-copy p{font-size:12px;margin:4px 0}
+  .tinder-copy>p:last-child{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .tinder-mode [data-kt-details]{padding:8px 12px;min-height:44px}
+  .tinder-action-panel{position:sticky;bottom:0;z-index:6;margin:0 -8px;padding:8px 8px max(10px,env(safe-area-inset-bottom));background:#131019f5;border-top:1px solid var(--line);border-radius:16px 16px 0 0;box-shadow:0 -8px 22px #09080d80}
+  .tinder-controls{margin:0 0 8px;gap:6px}
+  .tinder-controls .button{min-height:58px;padding:8px 4px;font-size:12px;touch-action:manipulation}
+  .tinder-controls span{font-size:20px;line-height:1.1}
+  .tinder-save{font-size:11px;gap:6px;text-align:left}
+  .tinder-save input{flex-shrink:0;width:20px;height:20px;margin:0}
+  .tinder-mode>.footer-actions{margin-top:8px}
+}

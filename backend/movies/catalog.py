@@ -31,6 +31,7 @@ def row_to_movie(row: Any) -> dict[str, Any]:
         **{field:row[field] if field in row.keys() else None for field in
            ('russian_title','theatrical_release_date','theatrical_release_type','theatrical_release_country','release_status')},
         "poster_url": media_url(row["id"], "poster", row["poster_path"]),
+        "poster_available": bool((row["poster_path"] and Path(row["poster_path"]).is_file()) or local_media(row["id"], "poster")),
         "backdrop_url": media_url(row["id"], "backdrop", row["backdrop_path"]),
     }
 
