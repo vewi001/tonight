@@ -1,7 +1,7 @@
 {
   "format_version": 1,
-  "app_version": "1.11.2",
-  "archive_url": "https://github.com/vewi001/tonight/releases/download/v1.11.2/Tonight-update-1.11.2.zip",
-  "size_bytes": 61564084,
-  "sha256": "d27ea64af194fdb35b73b33452a9113d7da12ae3fe4d5e1a7643953f45657f14"
+  "app_version": "1.11.3",
+  "archive_url": "https://github.com/vewi001/tonight/releases/download/v1.11.3/Tonight-update-1.11.3.zip",
+  "size_bytes": 61563543,
+  "sha256": "212523af8e1b0737b71cd58cd890530c7f3e6d038a2bb2b98cb5978414a74966"
 }

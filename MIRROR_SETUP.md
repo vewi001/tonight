@@ -25,9 +25,10 @@ S3 и отдельный сервер не нужны. Для зеркала п�
 
 ```text
 Tonight-mirror/
-  v1.9.0/
-    Tonight-update-1.9.0.zip
-    Tonight-portable-1.9.0.zip
+  v1.11.3/
+    Tonight-update-1.11.3.zip
+    Tonight-portable-1.11.3.zip
+    SHA256SUMS.txt
   catalog-v1.1.0/
     Tonight-catalog-1.1.0.zip
     Tonight-catalog-1.0.0-to-1.1.0.zip
@@ -38,6 +39,10 @@ Tonight-mirror/
   SHA256SUMS.txt
   README.txt
 ```
+
+17 октября 2026 года в публичную папку добавлен релиз `v1.11.3`: полный portable
+и отдельный пакет обновления. Публичные размеры и SHA-256 обоих архивов совпали
+с GitHub Release; скачивание пакета обновления с зеркала проверено.
 
 ## Подключение в приложении
 
