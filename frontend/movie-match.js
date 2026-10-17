@@ -1,4 +1,4 @@
-function createMovieMatch({state, root, render, shell, esc, poster, toast}) {
+function createMovieMatch({state, root, render, shell, esc, poster, toast, onBrowse}) {
   let current=null, error='', networkError=false, busy=false, online=true, socket=null, timer=null, heartbeat=null;
   let tab='cards', editing=false, draft=null, detail=null, ending=false, joining=false, link='';
   const storageKey='tonight:movie-match';
@@ -118,11 +118,12 @@ function createMovieMatch({state, root, render, shell, esc, poster, toast}) {
     }
     if(tab==='saved')body=`<header class="mm-head"><h1>Мой список</h1><button class="button secondary" data-mm-tab="cards">Назад к комнате</button></header><p class="hint">Сохранено только для вас в этом браузере. Список второго участника не меняется.</p>${saved().length?saved().map(m=>film(m)).join(''):'<div class="mm-empty"><h2>Сохранённых фильмов пока нет</h2><p>Нажмите «Сохранить себе» рядом с совпадением.</p></div>'}`;
     if(detail)body+=`<div class="mm-dialog" role="dialog" aria-modal="true" aria-labelledby="mm-detail-title" tabindex="-1"><div class="panel"><button class="button secondary" data-mm-detail-close>Вернуться к выбору</button><h2 id="mm-detail-title">${esc(detail.title)}</h2><p>${esc(detail.year)} · ${detail.runtime?`${detail.runtime} мин`:'Длительность неизвестна'} · ${esc(detail.genres.join(' · '))}</p><p>${esc(detail.overview||'Описание пока не добавлено')}</p></div></div>`;
-    return shell(`<section class="mm">${error?`<div class="mm-error" role="alert">${esc(error)} <button class="button ghost" data-mm-retry>Повторить</button></div>`:''}${!online&&current?'<p class="mm-offline" role="status">Ответы сохранены на компьютере. Дождитесь восстановления связи; непринятый ответ можно повторить.</p>':''}${body}</section>`,{nav:false});
+    return shell(`<section class="mm"><button class="button ghost choices-back" data-mm-back>← Способы выбора</button>${error?`<div class="mm-error" role="alert">${esc(error)} <button class="button ghost" data-mm-retry>Повторить</button></div>`:''}${!online&&current?'<p class="mm-offline" role="status">Ответы сохранены на компьютере. Дождитесь восстановления связи; непринятый ответ можно повторить.</p>':''}${body}</section>`,{nav:false});
   }
   function bind(){
     root.querySelectorAll('[data-mm-open]').forEach(b=>b.addEventListener('click',()=>enter()));
     if(state.view!=='match')return;
+    root.querySelector('[data-mm-back]')?.addEventListener('click',()=>{stop();history.replaceState(null,'',location.pathname);if(onBrowse)onBrowse();else location.reload();});
     root.querySelectorAll('[data-mm-new]').forEach(b=>b.addEventListener('click',()=>{stop();current=null;link='';localStorage.removeItem(storageKey);tab='cards';enter();}));
     root.querySelector('[data-mm-home]')?.addEventListener('click',()=>{stop();current=null;history.replaceState(null,'',location.pathname);localStorage.removeItem(storageKey);location.reload();});
     root.querySelectorAll('[data-mm-action]').forEach(b=>b.addEventListener('click',()=>action(b.dataset.mmAction,{...(b.dataset.mid?{movie_id:b.dataset.mid}:{}),...(b.dataset.vote?{vote:b.dataset.vote}:{})})));
@@ -142,11 +143,11 @@ function createMovieMatch({state, root, render, shell, esc, poster, toast}) {
     root.querySelector('[data-mm-end]')?.addEventListener('click',()=>{ending=true;paint();root.querySelector('.mm-end')?.scrollIntoView();});
     root.querySelector('[data-mm-end-cancel]')?.addEventListener('click',()=>{ending=false;paint();});
   }
-  window.addEventListener('online',()=>{if(current){error='';sync();connect();}});
+  window.addEventListener('online',()=>{if(current&&state.view==='match'){error='';sync();connect();}});
   window.addEventListener('offline',()=>{online=false;paint();});
   // The realtime signal is an invalidation, never a private room payload.
   // A fallback refresh also recovers dropped events and sleeping tabs.
   setInterval(()=>{if(current&&state.view==='match'&&!document.hidden&&!busy&&!editing)sync();},7000);
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&current){sync();if(!socket||socket.readyState>1)connect();}});
-  return {content,bind,entry:()=>`<section class="mm-entry panel"><p class="eyebrow">Movie Match</p><h2>Один фильм. Два «хочу».</h2><p>Пригласите второго участника, выбирайте независимо и найдите то, что хочется обоим.</p><button class="button large" data-mm-open>${stored()?'Вернуться к совместному выбору':'Выбрать вдвоём по ссылке'}</button><p class="hint">Без регистрации · на телефоне и компьютере</p></section>`,resume:async()=>{const room=new URLSearchParams(location.search).get('room');if(room||stored()){await enter(room||null);return true;}return false;}};
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&current&&state.view==='match'){sync();if(!socket||socket.readyState>1)connect();}});
+  return {content,bind,hasSession:()=>Boolean(stored()),entry:()=>`<button class="button large" data-mm-open>${stored()?'Продолжить совместный выбор':'Создать комнату для двоих'}</button>${stored()?'<p class="hint">Комната и ваши ответы сохранены в этом браузере.</p>':''}`,resume:async({fromLinkOnly=false}={})=>{const room=new URLSearchParams(location.search).get('room');if(room||(!fromLinkOnly&&stored())){await enter(room||null);return true;}return false;}};
 }

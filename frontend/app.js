@@ -14,7 +14,7 @@ const state = {
   invite: null,
   update: null, updateTimer: null, updateDismissed: '', updateInstallingFrom: null,
   view: 'loading',
-  searchDraft: null, navigationRequest: 0,
+  searchDraft: null, navigationRequest: 0, pendingChoice: null,
   presence: { lera: false, nikita: false },
   connected: true,
   prefs: { moods: [], energy: null, max_runtime: 120, min_year: 2000, disliked_genres: [] },
@@ -129,9 +129,10 @@ function shell(content, { narrow = false, nav = true } = {}) {
   const credits = state.setup?.tmdb_movies ? `<footer class="data-credits" aria-label="Источники данных"><a href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer"><img src="/assets/tmdb.svg" alt="TMDB"></a><span>This product uses the TMDB API but is not endorsed or certified by TMDB.</span></footer>` : '';
   return `<div class="shell">
     ${nav ? `<header class="topbar"><button class="brand" data-view="home">Tonight <span>🍿</span></button>${identity}<button class="icon-button nav-toggle" data-action="toggle-nav" aria-expanded="${!!state.navOpen}" aria-controls="main-navigation">Разделы ${state.navOpen ? '−' : '+'}</button><nav id="main-navigation" class="top-actions ${state.navOpen ? 'is-open' : ''}" aria-label="Основная навигация">
-      <button class="icon-button" data-view="history">◷ <span class="nav-label">История</span></button><button class="icon-button" data-view="weekly">✦ <span class="nav-label">Неделя</span></button><button class="icon-button" data-view="franchises">≡ <span class="nav-label">Серии</span></button><button class="icon-button" data-view="diagnostics">✓ <span class="nav-label">Проверить приложение</span></button><button class="icon-button" data-view="library">▤ <span class="nav-label">Каталог и обновления</span></button>
+      <button class="icon-button" data-view="choices">✧ <span class="nav-label">Выбрать фильм</span></button><button class="icon-button" data-view="search">⌕ <span class="nav-label">Найти фильм</span></button>
       <button class="icon-button" data-view="watchlist">♡ <span class="nav-label">На потом</span></button>
-      <button class="icon-button" data-view="taste">♡ <span class="nav-label">Наш вкус</span></button><button class="icon-button" data-view="search">⌕ <span class="nav-label">Найти</span></button>
+      <button class="icon-button" data-view="history">◷ <span class="nav-label">История</span></button>
+      <details class="nav-more"><summary>Ещё</summary><div><button class="icon-button" data-view="weekly">✦ <span class="nav-label">Неделя</span></button><button class="icon-button" data-view="franchises">≡ <span class="nav-label">Серии</span></button><button class="icon-button" data-view="taste">♡ <span class="nav-label">Наш вкус</span></button><button class="icon-button" data-view="library">▤ <span class="nav-label">Каталог и обновления</span></button><button class="icon-button" data-view="diagnostics">✓ <span class="nav-label">Проверить приложение</span></button></div></details>
     </nav></header>` : ''}
     <div data-update-banner>${updateDialog() || ['diagnostics','catalog'].includes(state.view) ? '' : updateControls()}</div>
     <main id="main" class="page ${narrow ? 'narrow' : ''}">${['tonight','tinder','roulette','filters','results','waiting','weekly'].includes(state.view)?temporaryExclusions():''}${content}${['diagnostics','catalog'].includes(state.view) ? `<div data-update-panel>${updateDialog() ? '' : updateControls(true)}</div>` : ''}</main>
@@ -178,7 +179,7 @@ function render() {
     return;
   }
   const views = {
-    match: movieMatch.content,
+    match: movieMatch.content, choices: renderChoices, 'match-start': renderMatchStart, 'taste-start': renderTasteStart,
     setup: renderSetup, home: renderHome, tonight: renderTonight, roulette: renderRoulette, tinder: renderTinder, vibe: renderVibe, filters: renderFilters,
     swipe: renderSwipe, waiting: renderWaiting, results: renderResults, quick: renderQuick,
     selected: renderSelected, watching:renderWatching, feedback: renderFeedback, eveningFeedback: renderEveningFeedback, history: renderHistory, weekly: renderWeekly, franchises: renderFranchises, diagnostics: renderDiagnostics,
@@ -298,12 +299,13 @@ function renderHome() {
   if (!state.user) {
     const accessCode = isRemoteClient() ? `<div class="panel" style="margin-bottom:1rem"><label for="access-code"><strong>Код с экрана Tonight</strong></label><input id="access-code" data-access-code inputmode="numeric" autocomplete="one-time-code" maxlength="6" value="${esc(state.accessCode)}" placeholder="6 цифр"><p class="hint">Введите код с экрана компьютера, затем выберите себя.</p></div>` : '';
     return shell(`<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">Выбор фильма для двоих</p><h1>Tonight <em>🍿</em></h1><p class="lede">Подберите фильм, который понравится обоим.</p></div>
-      ${movieMatch.entry()}${accessCode}
-      <h2>Персональный подбор</h2><p class="hint">Выберите свой профиль для рекомендаций и истории просмотров.</p>
+      ${accessCode}
+      <h2>${state.pendingChoice ? "Кто будет выбирать?" : "Кто сегодня смотрит?"}</h2><p class="hint">${state.pendingChoice ? "Выберите профиль — затем откроем выбранный способ подбора." : "Профиль сохраняет ваши предпочтения и историю просмотров."}</p>
       <div class="people-grid">
         <button class="person-card" data-user="lera" style="--glow:#ff667c"><span class="person-emoji">🍿</span><span class="person-name">Первый зритель</span></button>
         <button class="person-card" data-user="nikita" style="--glow:#ff9a59"><span class="person-emoji">🎬</span><span class="person-name">Второй зритель</span></button>
       </div>
+      <div class="guest-choice"><button class="button secondary" data-view="match-start">Выбрать вдвоём без профиля</button><button class="button ghost" data-view="choices">Все способы выбора</button></div>
       <div class="session-strip"><span>${esc(state.session?.title || 'Сегодня')}</span><div class="presence">${participantLine('lera')}${participantLine('nikita')}</div></div>
       <details class="disclosure"><summary>Подключить телефон</summary>${inviteCard()}</details>
     </section>`, {nav:false});
@@ -319,11 +321,50 @@ function renderHome() {
   else if (s?.participants?.[state.user]?.energy) { title = 'Продолжим с того же места?'; cta = 'Продолжить выбор'; }
   const active=s && !['choosing','completed'].includes(s.status) || s?.participants?.[state.user]?.energy;
   const job=state.expansion;
-  return shell(`${movieMatch.entry()}<details class="disclosure mm-legacy" ${active?'open':''}><summary>Подбор по вкусам — оценить знакомые фильмы</summary><section class="shared-entry shared-hero" aria-labelledby="shared-home-title"><p class="eyebrow">Кино для двоих</p><h1 id="shared-home-title">${active?esc(title):'Что посмотрим вместе?'}</h1><p class="lede">Каждый задаёт настроение и оценивает знакомые фильмы. Tonight предлагает варианты с учётом вас обоих.</p><button class="button large" data-action="continue-session">${active?esc(cta):'Выбрать вместе'}</button>${!active?'<div class="quick-entry"><button class="button ghost" data-view="quick">Выбрать готовый сценарий</button><p class="hint">«Устали» или «Поздно»: зададим условия вечера и перейдём к оценке знакомых фильмов.</p></div>':''}</section></details>
-    ${temporaryExclusions()}<section class="other-modes" aria-labelledby="other-modes-title"><h2 id="other-modes-title">Другие способы выбрать</h2><div class="mode-grid">${tonightEntry()}${rouletteEntry()}<section class="tinder-entry"><div><h3>Кино-Tinder</h3><p>Отмечайте интересные фильмы по одному — подбор будет учиться на ваших ответах.</p></div><button class="button secondary" data-tinder-open>Листать фильмы</button></section></div></section>
+  return shell(`<section class="home-choice" aria-labelledby="home-choice-title"><p class="eyebrow">Фильм под ваш вечер</p><h1 id="home-choice-title">Что посмотрим сегодня?</h1><p class="lede">Задайте настроение и условия — Tonight предложит подходящие фильмы.</p><div class="footer-actions"><button class="button large" data-choice-mode="tonight">Подобрать на вечер</button><button class="button secondary" data-view="choices">Все способы выбора <span aria-hidden="true">→</span></button></div></section>
+    ${active ? `<aside class="choice-resume"><div><strong>${esc(title)}</strong><p>У вас есть незавершённый подбор по вкусам.</p></div><button class="button secondary" data-action="continue-session">${esc(cta)}</button></aside>` : ''}
+    ${movieMatch.hasSession?.() ? '<aside class="choice-resume"><div><strong>Совместный выбор сохранён</strong><p>Вернитесь в комнату со своими ответами.</p></div><button class="button secondary" data-view="match-start">Продолжить вдвоём</button></aside>' : ''}
+    ${temporaryExclusions()}
     ${job && ['running','error'].includes(job.phase)?`<aside class="status-card" role="status"><p>${esc(job.message || 'Загрузка каталога')}</p><button class="button secondary" data-view="library">Открыть каталог</button></aside>`:''}
-    ${smartSearch.entry()}${personalSection()}<details class="disclosure"><summary>Подключить телефон и пригласить зрителя</summary>${inviteCard()}<div class="presence">${participantLine('lera')}${participantLine('nikita')}</div></details>`);
+    ${personalSection()}<details class="disclosure"><summary>Подключить телефон и пригласить зрителя</summary>${inviteCard()}<div class="presence">${participantLine('lera')}${participantLine('nikita')}</div></details>`);
 
+}
+
+function choicesBack() {
+  return '<button class="button ghost choices-back" data-view="choices">← Способы выбора</button>';
+}
+
+function renderChoices() {
+  const card = (mode, icon, title, text, note) => `<button class="choice-method" data-choice-mode="${mode}"><span class="choice-method-icon" aria-hidden="true">${icon}</span><span class="choice-method-copy"><strong>${title}</strong><span>${text}</span><small>${note}</small></span><span class="choice-method-arrow" aria-hidden="true">↗</span></button>`;
+  return shell(`<section class="choice-hub"><button class="button ghost choices-back" data-view="home">← На главную</button><div class="screen-head"><p class="eyebrow">Способы выбора</p><h1>Как найдём фильм?</h1><p class="lede">Выберите, что удобнее сейчас.</p></div><div class="choice-methods">
+    ${card('tonight','☾','По настроению','Настройте настроение, время и компанию. Получите короткую подборку.','Подбор на вечер')}
+    ${card('smart','⌕','По описанию','Расскажите своими словами, что хочется посмотреть.','Умный поиск')}
+    ${card('match','♡','Вдвоём по ссылке','Выбирайте каждый на своём устройстве. Найдём общие «хочу».','Movie Match · без профиля')}
+    ${card('roulette','⚄','Случайный фильм','Задайте условия и доверьте выбор случаю.','Кинорулетка')}
+    ${card('tinder','▱','Листать карточки','Отмечайте интересные фильмы по одному — подбор подстроится.','Кино-Tinder')}
+    ${card('taste','✧','По знакомым фильмам','Оцените уже просмотренное вдвоём. Учтём вкус каждого.','Подбор для двоих')}
+  </div></section>`, {nav:!!state.user});
+}
+
+function renderMatchStart() {
+  return shell(`<section class="match-intro">${choicesBack()}<div class="screen-head"><p class="eyebrow">Movie Match</p><h1>Выбрать фильм вдвоём</h1><p class="lede">Найдите то, что хочется посмотреть обоим.</p></div><ol class="match-intro-steps"><li><strong>Пригласите второго зрителя</strong><p>Отправьте ссылку на комнату. Регистрация и профиль не нужны.</p></li><li><strong>Выбирайте независимо</strong><p>Каждый листает фильмы и отмечает «Хочу посмотреть».</p></li><li><strong>Решите вместе</strong><p>Увидите общие варианты и оба подтвердите фильм на вечер.</p></li></ol><div class="match-intro-action">${movieMatch.entry()}<p class="hint">Для подключения с телефона нужна одна Wi-Fi-сеть. Tonight на компьютере должен оставаться открытым.</p></div></section>`, {narrow:true,nav:!!state.user});
+}
+
+function renderTasteStart() {
+  return shell(`<section>${choicesBack()}<div class="screen-head"><p class="eyebrow">Подбор для двоих</p><h1>Начнём со знакомых фильмов</h1><p class="lede">Каждый задаёт своё настроение и оценивает уже просмотренные фильмы. Tonight учитывает вкус обоих и предлагает общую подборку.</p></div><div class="footer-actions"><button class="button" data-action="continue-session">Начать или продолжить подбор</button><button class="button secondary" data-view="quick">Выбрать готовый сценарий</button></div><p class="hint">«Устали» или «Поздно»: готовые условия для вашего вечера.</p></section>`, {narrow:true});
+}
+
+function openChoiceMode(mode) {
+  ++state.navigationRequest;
+  smartSearch.cancel();
+  if (mode==='match') { state.view='match-start'; render(); return; }
+  if (!state.user) { state.pendingChoice=mode; state.view='home'; render(); return; }
+  state.pendingChoice=null;
+  if (mode==='tonight') openTonight();
+  else if (mode==='smart') smartSearch.open();
+  else if (mode==='roulette') openRoulette();
+  else if (mode==='tinder') openTinder();
+  else if (mode==='taste') { state.view='taste-start'; render(); }
 }
 
 function discoveryCard(movie, reason, action = 'select-personal') {
@@ -527,9 +568,9 @@ function renderWatchlist() {
 }
 
 function renderSearch() {
-  if (!smartSearch.isTitle()) return shell(`${smartSearch.tabs()}${smartSearch.content()}`);
+  if (!smartSearch.isTitle()) return shell(`${choicesBack()}${smartSearch.tabs()}${smartSearch.content()}`);
   const items = state.searchResults || [];
-  return shell(`${smartSearch.tabs()}<section><div class="screen-head"><p class="eyebrow">Поиск по названию</p><h2>Как называется фильм?</h2><p class="lede">Найдите знакомый фильм в локальном каталоге.</p></div><form class="search-form" data-action="search-catalog"><input name="query" value="${esc(state.searchQuery)}" placeholder="Название фильма" maxlength="100"><button class="button" type="submit">Найти</button></form>${state.searchQuery ? (items.length ? `<div class="history-grid">${items.map(movie => `<article class="history-card">${poster(movie)}<h3>${esc(movie.title)}</h3><p class="hint">${movie.year} · ${esc(movie.genres.join(' · '))}</p><p class="hint">${esc(movie.overview)}</p><div class="footer-actions">${trailerButton(movie, 'button secondary')}<button class="button secondary" data-action="select-search-result" data-movie-id="${movie.id}">Выбрать на сегодня</button></div></article>`).join('')}</div>` : '<div class="empty"><p>В локальном каталоге ничего не нашли. Попробуйте другое название.</p></div>') : ''}</section>`);
+  return shell(`${choicesBack()}${smartSearch.tabs()}<section><div class="screen-head"><p class="eyebrow">Поиск по названию</p><h2>Как называется фильм?</h2><p class="lede">Найдите знакомый фильм в локальном каталоге.</p></div><form class="search-form" data-action="search-catalog"><input name="query" value="${esc(state.searchQuery)}" placeholder="Название фильма" maxlength="100"><button class="button" type="submit">Найти</button></form>${state.searchQuery ? (items.length ? `<div class="history-grid">${items.map(movie => `<article class="history-card">${poster(movie)}<h3>${esc(movie.title)}</h3><p class="hint">${movie.year} · ${esc(movie.genres.join(' · '))}</p><p class="hint">${esc(movie.overview)}</p><div class="footer-actions">${trailerButton(movie, 'button secondary')}<button class="button secondary" data-action="select-search-result" data-movie-id="${movie.id}">Выбрать на сегодня</button></div></article>`).join('')}</div>` : '<div class="empty"><p>В локальном каталоге ничего не нашли. Попробуйте другое название.</p></div>') : ''}</section>`);
 }
 
 function renderTaste() {
@@ -641,6 +682,7 @@ function refreshWatchlistResults() {
 function bindCommon() {
   bindPosters();
   smartSearch.bind();
+  root.querySelectorAll('[data-choice-mode]').forEach(el=>el.addEventListener('click',()=>openChoiceMode(el.dataset.choiceMode)));
   root.querySelectorAll('details').forEach(el=>el.addEventListener('keydown',e=>{if(e.key==='Escape' && el.open){e.stopPropagation();el.open=false;el.querySelector('summary')?.focus();}}));
   root.querySelectorAll('[data-view]').forEach(el=>{if(el.dataset.view===state.view || el.dataset.view==='library' && state.view==='catalog')el.setAttribute('aria-current','page');});
   bindExpansion();
@@ -744,7 +786,8 @@ async function go(view) {
   const request = ++state.navigationRequest;
   const previousView = state.view;
   state.modal = null;
-  if (view === 'home') { state.personalAt=0; state.view='home'; render(); return; }
+  if (view === 'choices' || view === 'match-start') { state.pendingChoice=null; state.view=view; render(); return; }
+  if (view === 'home') { state.pendingChoice=null; state.personalAt=0; state.view='home'; render(); return; }
   if (view === 'vibe') { state.view='vibe'; render(); return; }
   if (view === 'quick') { state.view='quick'; render(); return; }
   if (view === 'watching' && state.session?.status === 'watching') { state.view='watching'; render(); return; }
@@ -776,7 +819,10 @@ async function selectUser(user) {
     await api(`/api/sessions/${state.session.id}/join`, {method:'POST', body:joinBody(user)});
     if (isRemoteClient()) sessionStorage.setItem('tonight:access-code', state.accessCode);
     state.session = await api(`/api/sessions/${state.session.id}`);
-    connectWs(); state.view='home'; render();
+    connectWs();
+    const pending=state.pendingChoice;
+    state.view='home';
+    if(pending)openChoiceMode(pending);else render();
   } catch (e) { state.user=null; localStorage.removeItem('tonight:user'); toast(e.message); render(); }
 }
 
@@ -1227,14 +1273,14 @@ async function openPendingFeedback() {
   } catch (_) {}
 }
 
-async function init() {
+async function init({destination='home'}={}) {
   if(!init.exclusionTimer)init.exclusionTimer=setInterval(()=>{if(state.user && state.view!=='match')refreshExclusions();},30000);
-  if(await movieMatch.resume())return;
+  if(await movieMatch.resume({fromLinkOnly:true}))return;
   state.view='loading'; render();
   try {
     [state.setup,state.session,state.invite]=await Promise.all([api('/api/setup/status'),api('/api/sessions/active'),api('/api/invite')]);
     if (isRemoteClient() || new URLSearchParams(location.search).get('join') === '1') localStorage.setItem('tonight:setup','1');
-    state.view=localStorage.getItem('tonight:setup')?'home':'setup';
+    state.view=destination!=='home'||localStorage.getItem('tonight:setup')?destination:'setup';
     if(state.user && isRemoteClient() && !state.accessCode){
       state.user=null; localStorage.removeItem('tonight:user');
     }
@@ -1407,7 +1453,7 @@ function renderTonight() {
   } else {
     body=`${nav}<div class="screen-head"><h2 tabindex="-1" data-tm-results>Ваши варианты на вечер.</h2><p class="lede">${t.data?.cold_start?'Пока знакомимся с вашим вкусом: учитываем настроение и данные каталога.':'По оценкам зрителей и условиям этого вечера.'}</p><p class="hint">${esc(tonightMoods.find(m=>m[0]===f.mood)?.[2] || '')} · ${f.max_runtime?`до ${f.max_runtime} мин`:'любая длительность'} · ${esc(tonightCompanies.find(c=>c[0]===f.company)?.[1] || '')}. Нажмите на нужный шаг выше, чтобы изменить условия.</p></div>${t.busy?'<div class="empty" role="status">Tonight IQ подбирает фильмы…</div>':`${t.data?.limited?`<aside class="tonight-empty" role="status"><h3>${t.data.items.length?`Нашлось ${t.data.items.length} из 5 вариантов`:'Подходящие варианты закончились'}</h3><p>${t.data.exhausted?'Уже показанные фильмы исключены из повторного подбора. ':''}${t.data.catalog_available===0?'В каталоге пока нет фильмов с подтверждёнными данными о прокате. Обновите каталог в разделе «Каталог».':'Сочетание условий, истории просмотров и исключений оставляет мало фильмов. Измените условия или снимите исключение просмотренных.'} Ограничения сохранены.</p>${!t.data.items.length?exclusionEmptyHelp():''}<div class="footer-actions">${(t.data.relaxations || []).map(r=>`<button class="button secondary" data-tm-relax="${r.field}">Ослабить: ${esc(r.label)} · до ${r.available} вариантов</button>`).join('')}<button class="button ghost" data-tm-step="3">Изменить фильтры</button>${t.seen.length?'<button class="button ghost" data-tm-repeat>Вернуться к уже показанным</button>':''}</div></aside>`:''}<p class="action-help">«Выбрать на сегодня» откроет экран вечера. Начало и завершение просмотра отмечаются отдельно.</p><div class="tonight-films">${(t.data?.items || []).map(m=>tonightCard(m)).join('')}</div><div class="footer-actions"><button class="button" data-tm-more ${!t.data?.items.length?'disabled':''}>Другие варианты ↻</button><button class="button ghost" data-view="home">На главную</button></div>`}`;
   }
-  return shell(`<section class="tonight-mode" aria-busy="${!!t.busy}"><p class="eyebrow">Подбор на вечер</p>${t.error?`<p role="alert" class="constraint-warning">${esc(t.error)}</p>`:''}${body}</section>`);
+  return shell(`<section class="tonight-mode" aria-busy="${!!t.busy}">${choicesBack()}<p class="eyebrow">Подбор на вечер</p>${t.error?`<p role="alert" class="constraint-warning">${esc(t.error)}</p>`:''}${body}</section>`);
 }
 async function fetchTonight(more=false) {
   const t=state.tonight;
@@ -1506,7 +1552,7 @@ function renderTinder(){
   const disabled=t.busy?'disabled':'';
   const details=m?`<p class="eyebrow">${tonightRating(m)}</p><h2>${esc(m.title)}</h2><p class="hint">${m.year||'Год не указан'} · ${m.runtime?`${m.runtime} мин`:'Длительность не указана'}</p><p class="hint">${esc((m.genres||[]).join(' · '))}</p>`:'';
   const undo=`<button class="button secondary tinder-undo" data-kt-undo aria-label="Отменить последнее действие" title="Отменить последнее действие" ${!t.history.length||t.busy||t.detail?'disabled':''}><span aria-hidden="true">↶</span><span class="undo-label">Отмена</span></button>`;
-  return shell(`<section class="tinder-mode" aria-busy="${!!t.busy}"><div class="tinder-heading"><h1>Кино-Tinder</h1><details class="mode-menu"><summary>Настройки</summary><div><label class="tinder-save"><input type="checkbox" data-kt-save ${t.save?'checked':''} ${disabled}> Добавлять интересные фильмы в общий список «На потом»</label><button class="button ghost" data-kt-new ${disabled}>Новая сессия</button><p class="hint keyboard-hint">← / → / ↑ — действия · Enter — подробности · Z — отмена</p></div></details></div>
+  return shell(`<section class="tinder-mode" aria-busy="${!!t.busy}">${choicesBack()}<div class="tinder-heading"><h1>Кино-Tinder</h1><details class="mode-menu"><summary>Настройки</summary><div><label class="tinder-save"><input type="checkbox" data-kt-save ${t.save?'checked':''} ${disabled}> Добавлять интересные фильмы в общий список «На потом»</label><button class="button ghost" data-kt-new ${disabled}>Новая сессия</button><p class="hint keyboard-hint">← / → / ↑ — действия · Enter — подробности · Z — отмена</p></div></details></div>
     ${t.error?`<p role="alert" class="constraint-warning">${esc(t.error)}</p><button class="button secondary" data-kt-retry>${t.pending?'Повторить сохранение':'Повторить загрузку'}</button>`:''}
     <p class="mode-explanation">Отмечайте интерес к будущему просмотру. «Уже смотрел» сохраняет просмотр без оценки.</p><p class="action-help">${t.save?'Интересные фильмы также сохраняются в общем списке «На потом».':'Интерес не добавляет фильм в список. Автосохранение можно включить в настройках.'}</p>
     ${t.detail&&m?`<div class="tinder-detail"><button class="button ghost" data-kt-close>← К карточке</button>${details}<p>${esc(m.overview||'Описание отсутствует в каталоге.')}</p><p class="tonight-reason">${esc(m.recommendation_reason || '')}</p></div>`:m?`
@@ -1607,7 +1653,7 @@ function renderRoulette(){
   const r=state.roulette;if(!r||r.user!==state.user)return renderHome();
   const f=r.filters,m=r.movie,locked=r.busy||r.spinning;
   const genreChoices=(key,label)=>`<fieldset><legend>${label}</legend><div class="chip-grid">${[...new Set([...genres,'семейный','приключения','криминал','история','музыка','военный','вестерн'])].map(g=>`<button class="chip ${f[key].includes(g)?'selected':''}" data-r-genre="${key}" data-r-value="${esc(g)}" aria-pressed="${f[key].includes(g)}">${esc(g)}</button>`).join('')}</div></fieldset>`;
-  return shell(`<section class="roulette-mode"><div class="tinder-heading"><div><h1>Кинорулетка</h1></div></div>
+  return shell(`<section class="roulette-mode">${choicesBack()}<div class="tinder-heading"><div><h1>Кинорулетка</h1></div></div>
   <details class="roulette-configuration" data-r-settings data-render-state ${r.settingsOpen??!m?'open':''}><summary>Настройки выбора</summary><fieldset class="roulette-settings" ${locked?'disabled':''}><legend>Как выбираем?</legend><div class="tonight-choices">${[['smart','Умный выбор','Больше веса вашему вкусу'],['surprise','Полная неожиданность','Больше шансов новым жанрам'],['watchlist','Из моего списка','Только из «На потом»']].map(([id,title,desc])=>`<button class="choice ${f.mode===id?'selected':''}" data-r-mode="${id}" aria-pressed="${f.mode===id}"><strong>${title}</strong><small>${desc}</small></button>`).join('')}</div>
   <details class="roulette-filters" ${r.filtersOpen?'open':''}><summary>Быстрые ограничения</summary><p class="hint">Применяем вместе с сохранёнными ограничениями профиля. Автоматически ничего не ослабляем.</p><div class="roulette-inputs">${[['max_runtime','Максимум минут',1,1440],['min_rating','Минимальный рейтинг',0,10],['min_year','Год от',1888,2100],['max_year','Год до',1888,2100]].map(([key,label,min,max])=>`<label>${label}<input type="number" data-r-input="${key}" min="${min}" max="${max}" step="${key==='min_rating'?'.1':'1'}" value="${f[key]??''}" placeholder="Неважно"></label>`).join('')}</div>${genreChoices('included_genres','Жанры: хотя бы один из выбранных')}${genreChoices('excluded_genres','Исключить жанры')}<label class="tonight-check"><input type="checkbox" data-r-watched ${f.exclude_watched?'checked':''}> Исключить уже просмотренные</label></details>
   </fieldset><p class="hint">Скрытые и нежелательные фильмы исключены во всех режимах.</p></details>
@@ -1955,10 +2001,10 @@ function createSmartSearch({state,root,api,render,esc,poster,tonightRating,tonig
       finally{local.saving.delete(id);if(state.user===user&&state.view==='search')render();}
     }));
   }
-  return {entry,content,tabs,bind,cancel,isTitle:()=>current().mode==='title'};
+  return {entry,content,tabs,bind,cancel,open:()=>{cancel();current().mode='smart';state.view='search';render();},isTitle:()=>current().mode==='title'};
 }
 
 
-const movieMatch=typeof createMovieMatch==='function'?createMovieMatch({state,root,render,shell,esc,poster,toast}):{entry:()=>'',bind:()=>{},content:()=>'',resume:async()=>false};
+const movieMatch=typeof createMovieMatch==='function'?createMovieMatch({state,root,render,shell,esc,poster,toast,onBrowse:()=>init({destination:'choices'})}):{entry:()=>'',bind:()=>{},content:()=>'',resume:async()=>false};
 const smartSearch=createSmartSearch({state,root,api,render,esc,poster,tonightRating,tonightSynopsis,toast});
 init();
