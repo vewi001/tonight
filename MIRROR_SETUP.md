@@ -25,6 +25,10 @@ S3 и отдельный сервер не нужны. Для зеркала п�
 
 ```text
 Tonight-mirror/
+  v1.12.0/
+    Tonight-update-1.12.0.zip
+    Tonight-portable-1.12.0.zip
+    SHA256SUMS.txt
   v1.11.4/
     Tonight-update-1.11.4.zip
     Tonight-portable-1.11.4.zip
@@ -92,3 +96,10 @@ Tonight выбирает изменения только для совпадаю
 
 Источник о получении ссылки на скачивание публичного ресурса:
 [документация Яндекса](https://yandex.cloud/ru/docs/datasphere/operations/data/connect-to-ya-disk).
+
+
+18 октября 2026 года в существующее публичное зеркало добавлена папка `v1.12.0`:
+полный portable-архив, пакет обновления и `SHA256SUMS.txt`. Публичные размеры и
+SHA-256 обоих архивов сверены с GitHub Release; доступ к скачиванию проверен.
+Локальный комплект для переноса: `outputs/release-1.12.0/Tonight-mirror-v1.12.0.zip`
+(внутри папка `v1.12.0`, ZIP-файлы приложения не распакованы).
