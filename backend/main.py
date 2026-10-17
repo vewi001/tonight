@@ -21,6 +21,7 @@ import qrcode
 import qrcode.image.svg
 
 from backend.api.realtime import manager
+from backend.sessions import movie_match as match_service
 from backend.backups import MAX_IMPORTED_BACKUP_BYTES, create_backup, import_backup, list_backups, restore_backup
 from backend.catalog_bundle import bootstrap_catalog
 from backend.catalog_manager import CatalogUpdateManager
@@ -33,6 +34,8 @@ from backend.logging_filters import install_expected_disconnect_filter
 from backend.models.schemas import AvoidSimilarIn, EveningFeedbackIn, FeedbackIn, JoinIn, PreferencesIn, PrivacyDeleteIn, RestoreBackupIn, SwipeIn, UserAction
 from backend.network import active_port, invite_url, lan_ip
 from backend.movies.catalog import get_movie, search_movies
+from backend.movies.search_query import SmartSearchIn
+from backend.movies.smart_search import search as smart_search
 from backend.movies.franchises import franchises
 from backend.movies.genres import normalize_genres
 from backend.movies.catalog_sync import refresh_catalog_if_due, sync_status
@@ -46,6 +49,7 @@ from backend.recommendation.avoidance import add_avoidance, list_avoidances, rem
 from backend.recommendation.taste_profile import exclude_genre, profile_filters, reset_profile
 from backend.recommendation.weekly import weekly_picks
 from backend.recommendation.personal import personal_recommendations
+from backend.recommendation.exclusions import change_rule, state_for_user
 from backend.release import APP_VERSION, ReleaseError
 from backend.auto_update import UpdateManager, UpdateError
 from backend.update_install import prepare_handoff
@@ -138,13 +142,18 @@ app = FastAPI(title="Tonight", version=APP_VERSION, lifespan=lifespan)
 @app.middleware('http')
 async def invalidate_personal_recommendations(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith('/api/') and request.method in {'POST', 'PUT', 'PATCH', 'DELETE'} and response.status_code < 400:
+    if request.url.path.startswith('/api/') and not request.url.path.startswith('/api/search/smart/') and request.method in {'POST', 'PUT', 'PATCH', 'DELETE'} and response.status_code < 400:
         for session_id in list(manager.connections):
             await manager.broadcast(session_id, {'type': 'personal_changed'})
     return response
 
 
 async def publish_state(session_id: int, event: str = "state") -> None:
+    with db_session() as db:
+        row = db.execute('SELECT match_data FROM sessions WHERE id=?', (session_id,)).fetchone()
+    if row and row['match_data'] != '{}':
+        await manager.broadcast(session_id, {'type': 'match_changed'})
+        return
     await manager.broadcast(session_id, {"type": event, "session": session_state(session_id)})
 
 
@@ -170,8 +179,6 @@ async def finalize_recommendations(session_id: int) -> dict:
     if state["recommendations"]:
         return state
     deterministic = recommend(session_id, settings.candidate_count)
-    if not deterministic:
-        raise ValueError("Фильтры слишком строгие — попробуйте ослабить ограничения")
     store_recommendations(session_id, deterministic)
     ready_state = session_state(session_id)
     await publish_state(session_id, "recommendations_ready")
@@ -231,6 +238,13 @@ async def local_usage_summary(request: Request) -> dict:
 @app.get("/api/movies/search")
 async def search_catalog(q: str = "") -> dict:
     return {"items": search_movies(q)}
+
+
+@app.post('/api/search/smart/{user_id}')
+async def search_smart(user_id: str, payload: SmartSearchIn) -> dict:
+    if user_id not in {'lera', 'nikita'}:
+        raise HTTPException(400, 'Неизвестный пользователь')
+    return await asyncio.to_thread(smart_search, user_id, payload)
 
 
 @app.get("/api/setup/status")
@@ -422,6 +436,18 @@ def _is_public_remote_api(request: Request) -> bool:
 @app.middleware("http")
 async def require_evening_code_for_remote_api(request: Request, call_next):
     path = request.url.path
+    # Match invitations never grant a guest the old profile/code privileges.
+    # Guard the old mutation/read routes even on loopback and for a known code.
+    parts = path.split('/')
+    if len(parts) > 3 and parts[2] == 'sessions' and parts[3].isdigit():
+        with db_session() as db:
+            room = db.execute("SELECT match_data FROM sessions WHERE id=?", (int(parts[3]),)).fetchone()
+        if room and room['match_data'] != '{}':
+            if len(parts) > 4 and parts[4] == 'match':
+                return await call_next(request)
+            return JSONResponse({'detail': 'Откройте экран Movie Match для этой комнаты.'}, status_code=403)
+    if path == '/api/movie-match/join' or (path == '/api/sessions/new' and request.query_params.get('movie_match') == 'true'):
+        return await call_next(request)
     if not path.startswith("/api/") or _is_loopback(request.client.host if request.client else None) or _is_public_remote_api(request):
         return await call_next(request)
     session_id = None
@@ -470,9 +496,14 @@ async def get_active_session(request: Request) -> dict:
 
 
 @app.post("/api/sessions/new")
-async def new_session() -> dict:
+async def new_session(request: Request, movie_match: bool = False, profile: str | None = None) -> dict:
     from datetime import date
     from backend.sessions.service import _title
+    if movie_match:
+        try:
+            match_service.credential(request.headers.get('X-Match-Token'))
+        except match_service.MatchError as exc:
+            raise HTTPException(exc.status, str(exc)) from exc
     now = datetime.now().isoformat(timespec="seconds")
     with db_session() as db:
         cur = db.execute(
@@ -480,7 +511,73 @@ async def new_session() -> dict:
             (date.today().isoformat(), _title(date.today()), "choosing", generate_access_code(), now, now),
         )
         session_id = cur.lastrowid
+        if movie_match:
+            token = request.headers.get('X-Match-Token')
+            owner_profile = profile if _is_loopback(request.client.host if request.client else None) else None
+            match_service.initialize_room(session_id, token, owner_profile, db=db)
+    if movie_match:
+        return _match_response(match_service.snapshot(session_id, token), token)
     return session_state(session_id)
+
+
+def _match_response(snapshot: dict, token: str) -> JSONResponse:
+    response = JSONResponse(snapshot, headers={'Cache-Control': 'no-store'})
+    response.set_cookie(f'match_{snapshot["id"]}', token, httponly=True, samesite='strict', max_age=86400, path=f'/ws/session/{snapshot["id"]}/')
+    return response
+
+
+class MatchJoinIn(BaseModel):
+    room: str = Field(min_length=20, max_length=80, pattern=r'^[A-Za-z0-9_-]+$')
+
+
+@app.get('/api/sessions/{session_id}/match/qr')
+async def match_qr(session_id: int, room: str, request: Request):
+    try:
+        with db_session() as db:
+            data = match_service.read(db, session_id)
+        if not secrets.compare_digest(room, data['room']):
+            raise match_service.MatchError('Приглашение недействительно', 404)
+        match_service.available(data)
+    except match_service.MatchError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    port = request.url.port or (443 if request.url.scheme == 'https' else 80)
+    url = f'{request.url.scheme}://{lan_ip()}:{port}/?join=1&room={data["room"]}'
+    image = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage)
+    stream = io.BytesIO()
+    image.save(stream)
+    return Response(stream.getvalue(), media_type='image/svg+xml', headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/api/movie-match/join')
+async def match_join(payload: MatchJoinIn, request: Request):
+    token = request.headers.get('X-Match-Token')
+    try:
+        current = await asyncio.to_thread(match_service.join, payload.room, token)
+    except match_service.MatchError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    await manager.broadcast(current['id'], {'type': 'match_changed'})
+    return _match_response(current, token)
+
+
+@app.get('/api/sessions/{session_id}/match')
+async def match_state(session_id: int, request: Request):
+    token = request.headers.get('X-Match-Token')
+    try:
+        current = await asyncio.to_thread(match_service.snapshot, session_id, token)
+    except match_service.MatchError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    return _match_response(current, token)
+
+
+@app.post('/api/sessions/{session_id}/match')
+async def match_action(session_id: int, payload: match_service.Action, request: Request):
+    token = request.headers.get('X-Match-Token')
+    try:
+        current = await asyncio.to_thread(match_service.act, session_id, token, payload)
+    except match_service.MatchError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    await manager.broadcast(session_id, {'type': 'match_changed'})
+    return _match_response(current, token)
 
 
 @app.post("/api/sessions/{session_id}/restart")
@@ -495,7 +592,7 @@ async def restart_session(session_id: int) -> dict:
         if not existing:
             raise HTTPException(404, "Сессия не найдена")
         changed = db.execute(
-            "UPDATE sessions SET status='abandoned',updated_at=? WHERE id=? AND status != 'abandoned'",
+            "UPDATE sessions SET status='abandoned',temporary_exclusions='{}',updated_at=? WHERE id=? AND status != 'abandoned'",
             (now, session_id),
         ).rowcount
         if not changed:
@@ -914,6 +1011,76 @@ async def delete_watchlist_movie(movie_id: str) -> dict:
     return {"ok": True}
 
 
+class ExclusionIn(BaseModel):
+    kind: Literal['movie', 'genre', 'keyword', 'director', 'max_runtime', 'watched']
+    value: str = Field(min_length=1, max_length=200)
+    scope: Literal['permanent', 'temporary'] = 'permanent'
+    session_id: int | None = None
+
+
+async def exclusions_updated():
+    # Replace persisted shared shortlists as well as invalidating personal clients.
+    with db_session() as db:
+        ids = [r[0] for r in db.execute("SELECT id FROM sessions WHERE status='recommended' AND session_date=?", (datetime.now().date().isoformat(),))]
+    for sid in ids:
+        store_recommendations(sid, recommend(sid, settings.candidate_count))
+    for sid in list(manager.connections):
+        await manager.broadcast(sid, {'type': 'exclusions_changed', 'session': session_state(sid)})
+
+
+@app.get('/api/exclusions/{user_id}')
+async def get_exclusions(user_id: str, request: Request, session_id: int | None = None):
+    if session_id is not None and not _has_evening_access(request, session_id):
+        raise HTTPException(403, "Введите код этого вечера")
+    if user_id not in {'lera', 'nikita'}:
+        raise HTTPException(400, 'Неизвестный пользователь')
+    return state_for_user(user_id, session_id)
+
+
+@app.post('/api/exclusions/{user_id}')
+async def add_exclusion(user_id: str, payload: ExclusionIn, request: Request):
+    if payload.scope == "temporary" and payload.session_id is None:
+        raise HTTPException(422, "Укажите текущий вечер")
+    if payload.session_id is not None and not _has_evening_access(request, payload.session_id):
+        raise HTTPException(403, "Введите код этого вечера")
+    try:
+        change_rule(user_id, payload.scope, kind=payload.kind, value=payload.value, session_id=payload.session_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await exclusions_updated()
+    return state_for_user(user_id, payload.session_id)
+
+
+@app.delete('/api/exclusions/{user_id}/disinterest/{movie_id}')
+async def remove_disinterest(user_id: str, movie_id: str):
+    if user_id not in {'lera', 'nikita'}:
+        raise HTTPException(400, 'Неизвестный пользователь')
+    with db_session() as db:
+        db.execute("DELETE FROM viewer_movie_actions WHERE user_id=? AND movie_id=? AND action='dislike'", (user_id, movie_id))
+    await exclusions_updated()
+    return state_for_user(user_id)
+
+
+@app.delete('/api/exclusions/{user_id}')
+async def delete_exclusion(user_id: str, request: Request, scope: Literal['permanent', 'temporary'] = 'permanent',
+                           kind: str | None = None, value: str | None = None, session_id: int | None = None,
+                           clear: bool = False, confirmed: bool = False):
+    if scope == 'temporary' and session_id is None:
+        raise HTTPException(422, 'Укажите текущий вечер')
+    if session_id is not None and not _has_evening_access(request, session_id):
+        raise HTTPException(403, 'Введите код этого вечера')
+    if clear and scope == 'permanent' and not confirmed:
+        raise HTTPException(422, 'Подтвердите очистку постоянных исключений')
+    if not clear and (not kind or value is None):
+        raise HTTPException(422, 'Выберите исключение')
+    try:
+        change_rule(user_id, scope, kind=kind, value=value, session_id=session_id, remove=True, clear=clear)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await exclusions_updated()
+    return state_for_user(user_id, session_id)
+
+
 @app.get("/api/taste")
 async def taste() -> dict:
     from collections import defaultdict
@@ -1099,7 +1266,22 @@ async def websocket_session(websocket: WebSocket, session_id: int, user_id: str,
     except ValueError:
         await websocket.close(code=1008)
         return
-    if not _is_loopback(websocket.client.host if websocket.client else None):
+    with db_session() as db:
+        room = db.execute('SELECT match_data FROM sessions WHERE id=?', (session_id,)).fetchone()
+    is_match = bool(room and room['match_data'] != '{}')
+    if is_match:
+        try:
+            data = loads(room['match_data'], {})
+            who = match_service.member(data, websocket.cookies.get(f'match_{session_id}'))
+            if user_id != ('lera', 'nikita')[who]:
+                raise match_service.MatchError('Неверный участник', 403)
+            origin = websocket.headers.get('origin')
+            if origin and origin != str(websocket.url).split('/ws/')[0].replace('ws:', 'http:').replace('wss:', 'https:'):
+                raise match_service.MatchError('Неверный источник', 403)
+        except match_service.MatchError:
+            await websocket.close(code=1008)
+            return
+    elif not _is_loopback(websocket.client.host if websocket.client else None):
         if not secrets.compare_digest(code or "", session_access_code(session_id)):
             await websocket.close(code=1008)
             return

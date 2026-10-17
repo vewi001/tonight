@@ -9,6 +9,7 @@ from backend.database.db import connect, db_session, dumps, generate_access_code
 from backend.movies.catalog import get_movie, is_released, row_to_movie, swipe_deck
 from backend.movies.genres import normalize_genres
 from backend.recommendation.engine import MOOD_GENRES
+from backend.recommendation.exclusions import filter_for_users
 
 RU_MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
 RU_WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
@@ -21,7 +22,7 @@ def _title(day: date) -> str:
 def active_session(create: bool = True) -> dict[str, Any] | None:
     today = date.today().isoformat()
     with db_session() as db:
-        row = db.execute("SELECT * FROM sessions WHERE status='watching' OR session_date=? ORDER BY (status='watching') DESC, id DESC LIMIT 1", (today,)).fetchone()
+        row = db.execute("SELECT * FROM sessions WHERE match_data='{}' AND (status='watching' OR session_date=?) ORDER BY (status='watching') DESC, id DESC LIMIT 1", (today,)).fetchone()
         if not row and create:
             now = datetime.now().isoformat(timespec="seconds")
             cur = db.execute(
@@ -178,6 +179,7 @@ def choose_movie(session_id: int, exclude_current: bool = False) -> dict[str, An
             current = get_movie(item["id"])
             if current and is_released(current):
                 candidates.append({**item,**current})
+        candidates = filter_for_users(db, candidates, session_id=session_id)
         if not candidates:
             raise ValueError("no candidates left")
         top = candidates[: min(4, len(candidates))]
@@ -203,7 +205,7 @@ def choose_specific_recommendation(session_id: int, movie_id: str) -> dict[str, 
             raise ValueError('Сначала завершите текущий просмотр')
         recommendations = loads(session["recommendations"], [])
         movie = get_movie(movie_id)
-        if movie_id in rejected or movie_id not in {item.get("id") for item in recommendations} or not movie or not is_released(movie):
+        if movie_id in rejected or movie_id not in {item.get("id") for item in recommendations} or not movie or not is_released(movie) or not filter_for_users(db, [movie], session_id=session_id):
             raise ValueError("movie is not an available recommendation")
         selected_at = datetime.now().isoformat(timespec="seconds")
         db.execute(
@@ -281,7 +283,7 @@ def confirm_watched(session_id: int) -> dict[str, Any]:
         now = datetime.now().isoformat(timespec="seconds")
         db.execute("INSERT OR IGNORE INTO watch_history(session_id,movie_id,watched_at) VALUES(?,?,?)", (session_id, session["selected_movie_id"], now))
         db.execute("DELETE FROM watchlist WHERE movie_id=?", (session["selected_movie_id"],))
-        db.execute("UPDATE sessions SET status='completed',updated_at=? WHERE id=?", (now, session_id))
+        db.execute("UPDATE sessions SET status='completed',temporary_exclusions='{}',updated_at=? WHERE id=?", (now, session_id))
         history = db.execute("SELECT id FROM watch_history WHERE session_id=?", (session_id,)).fetchone()
     return {"history_id": history["id"], "movie": get_movie(session["selected_movie_id"])}
 
@@ -445,6 +447,7 @@ def session_state(session_id: int, db: Any | None = None) -> dict[str, Any]:
             if not current or not is_released(current):
                 continue
             recommendations.append({**item,**current})
+        recommendations = filter_for_users(db, recommendations, session_id=session_id)
         # Recommendations are persisted snapshots. Refresh their media URLs so
         # a poster downloaded after matching immediately replaces cached art.
         recommendation_context = None

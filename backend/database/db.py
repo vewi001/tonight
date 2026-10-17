@@ -197,6 +197,13 @@ CREATE TABLE IF NOT EXISTS avoid_similar (
     FOREIGN KEY(user_id) REFERENCES users(id),
     FOREIGN KEY(movie_id) REFERENCES movies(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS recommendation_exclusions (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    value TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(user_id,kind,value)
+);
 CREATE TABLE IF NOT EXISTS taste_genre_exclusions (
     user_id TEXT NOT NULL,
     genre TEXT NOT NULL,
@@ -261,6 +268,8 @@ def initialize(path: Path | None = None) -> None:
         if "franchise_order" not in movie_columns:
             db.execute("ALTER TABLE movies ADD COLUMN franchise_order INTEGER")
         session_columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)").fetchall()}
+        if "match_data" not in session_columns:
+            db.execute("ALTER TABLE sessions ADD COLUMN match_data TEXT NOT NULL DEFAULT '{}'")
         if "access_code" not in session_columns:
             db.execute("ALTER TABLE sessions ADD COLUMN access_code TEXT")
         if "selected_at" not in session_columns:
@@ -269,6 +278,10 @@ def initialize(path: Path | None = None) -> None:
             db.execute("ALTER TABLE sessions ADD COLUMN reconnect_count INTEGER NOT NULL DEFAULT 0")
         if "viewing_company" not in session_columns:
             db.execute("ALTER TABLE sessions ADD COLUMN viewing_company TEXT NOT NULL DEFAULT 'couple'")
+        if "temporary_exclusions" not in session_columns:
+            db.execute("ALTER TABLE sessions ADD COLUMN temporary_exclusions TEXT NOT NULL DEFAULT '{}'")
+        # Expired evening rules are never migrated into a lasting preference.
+        db.execute("UPDATE sessions SET temporary_exclusions='{}' WHERE session_date!=? OR status IN ('completed','abandoned')", (datetime.now().date().isoformat(),))
         if "solo_user_id" not in session_columns:
             db.execute("ALTER TABLE sessions ADD COLUMN solo_user_id TEXT")
         missing_codes = db.execute("SELECT id FROM sessions WHERE access_code IS NULL OR length(access_code) != 6").fetchall()

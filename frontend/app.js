@@ -5,6 +5,7 @@ const state = {
   user: localStorage.getItem('tonight:user'),
   accessCode: sessionStorage.getItem('tonight:access-code') || '',
   session: null,
+  exclusions:null, exclusionsFor:null, exclusionsAt:0, exclusionsPending:false, exclusionBusy:false, exclusionDraft:{},
   roulette: null, rouletteRequest: 0, tonight: null, tonightRequest: 0, tinder: null, tinderRequest: 0,
   personal: null, personalUser: null, personalAt: 0, personalPending: false, personalError: '', personalRevision: 0,
   setup: null,
@@ -112,7 +113,7 @@ async function api(path, options = {}) {
     const detail = Array.isArray(body.detail) ? body.detail.map(item => item.msg).filter(Boolean).join('. ') : body.detail;
     throw new Error(detail || 'Что-то пошло не так');
   }
-  if (options.method && options.method !== 'GET') { state.personalAt = 0; state.personalRevision++; }
+  if (options.method && options.method !== 'GET' && !path.startsWith('/api/search/smart/')) { state.personalAt = 0; state.personalRevision++; }
   return response.json();
 }
 
@@ -133,7 +134,7 @@ function shell(content, { narrow = false, nav = true } = {}) {
       <button class="icon-button" data-view="taste">♡ <span class="nav-label">Наш вкус</span></button><button class="icon-button" data-view="search">⌕ <span class="nav-label">Найти</span></button>
     </nav></header>` : ''}
     <div data-update-banner>${updateDialog() || ['diagnostics','catalog'].includes(state.view) ? '' : updateControls()}</div>
-    <main id="main" class="page ${narrow ? 'narrow' : ''}">${content}${['diagnostics','catalog'].includes(state.view) ? `<div data-update-panel>${updateDialog() ? '' : updateControls(true)}</div>` : ''}</main>
+    <main id="main" class="page ${narrow ? 'narrow' : ''}">${['tonight','tinder','roulette','filters','results','waiting','weekly'].includes(state.view)?temporaryExclusions():''}${content}${['diagnostics','catalog'].includes(state.view) ? `<div data-update-panel>${updateDialog() ? '' : updateControls(true)}</div>` : ''}</main>
     ${credits}
     <div data-connection-status role="status">${connectionNotice()}</div>
     <div data-update-dialog>${updateDialog()}</div>
@@ -177,6 +178,7 @@ function render() {
     return;
   }
   const views = {
+    match: movieMatch.content,
     setup: renderSetup, home: renderHome, tonight: renderTonight, roulette: renderRoulette, tinder: renderTinder, vibe: renderVibe, filters: renderFilters,
     swipe: renderSwipe, waiting: renderWaiting, results: renderResults, quick: renderQuick,
     selected: renderSelected, watching:renderWatching, feedback: renderFeedback, eveningFeedback: renderEveningFeedback, history: renderHistory, weekly: renderWeekly, franchises: renderFranchises, diagnostics: renderDiagnostics,
@@ -185,12 +187,15 @@ function render() {
   root.innerHTML = (views[state.view] || renderHome)();
   root.querySelectorAll('details').forEach(el=>{if(openDisclosures.has(el.dataset.disclosureKey || el.dataset.descriptionKey || el.querySelector('summary')?.textContent))el.open=true;});
   bindCommon();
+  movieMatch.bind();
+  bindExclusions();
   if (state.view === 'swipe') bindSwipeGestures();
   if (state.view === 'waiting') scheduleWaitingCheck();
   if (state.modal) renderModal();
   if (state.deferMovieId) renderDeferDialog();
   if (state.privacyDeleteOpen) renderPrivacyDeleteDialog();
   if (state.view === 'home' && state.user && !state.personalPending && Date.now() - state.personalAt > 30000) refreshPersonal();
+  if(state.user && ['home','tonight','tinder','roulette','taste','filters','results','waiting','weekly'].includes(state.view) && !state.exclusionsPending && !state.exclusionError && (!exclusionData() || Date.now()-state.exclusionsAt>30000))refreshExclusions();
   if (viewChanged) requestAnimationFrame(() => window.scrollTo(0, 0));
 }
 
@@ -293,7 +298,8 @@ function renderHome() {
   if (!state.user) {
     const accessCode = isRemoteClient() ? `<div class="panel" style="margin-bottom:1rem"><label for="access-code"><strong>Код с экрана Tonight</strong></label><input id="access-code" data-access-code inputmode="numeric" autocomplete="one-time-code" maxlength="6" value="${esc(state.accessCode)}" placeholder="6 цифр"><p class="hint">Введите код с экрана компьютера, затем выберите себя.</p></div>` : '';
     return shell(`<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">Выбор фильма для двоих</p><h1>Tonight <em>🍿</em></h1><p class="lede">Подберите фильм, который понравится обоим.</p></div>
-      ${accessCode}
+      ${movieMatch.entry()}${accessCode}
+      <h2>Персональный подбор</h2><p class="hint">Выберите свой профиль для рекомендаций и истории просмотров.</p>
       <div class="people-grid">
         <button class="person-card" data-user="lera" style="--glow:#ff667c"><span class="person-emoji">🍿</span><span class="person-name">Первый зритель</span></button>
         <button class="person-card" data-user="nikita" style="--glow:#ff9a59"><span class="person-emoji">🎬</span><span class="person-name">Второй зритель</span></button>
@@ -313,10 +319,10 @@ function renderHome() {
   else if (s?.participants?.[state.user]?.energy) { title = 'Продолжим с того же места?'; cta = 'Продолжить выбор'; }
   const active=s && !['choosing','completed'].includes(s.status) || s?.participants?.[state.user]?.energy;
   const job=state.expansion;
-  return shell(`<section class="shared-entry shared-hero" aria-labelledby="shared-home-title"><p class="eyebrow">Кино для двоих</p><h1 id="shared-home-title">${active?esc(title):'Что посмотрим вместе?'}</h1><p class="lede">Каждый задаёт настроение и оценивает знакомые фильмы. Tonight предлагает варианты с учётом вас обоих.</p><button class="button large" data-action="continue-session">${active?esc(cta):'Выбрать вместе'}</button>${!active?'<div class="quick-entry"><button class="button ghost" data-view="quick">Выбрать готовый сценарий</button><p class="hint">«Устали» или «Поздно»: зададим условия вечера и перейдём к оценке знакомых фильмов.</p></div>':''}</section>
-    <section class="other-modes" aria-labelledby="other-modes-title"><h2 id="other-modes-title">Другие способы выбрать</h2><div class="mode-grid">${tonightEntry()}${rouletteEntry()}<section class="tinder-entry"><div><h3>Кино-Tinder</h3><p>Отмечайте интересные фильмы по одному — подбор будет учиться на ваших ответах.</p></div><button class="button secondary" data-tinder-open>Листать фильмы</button></section></div></section>
+  return shell(`${movieMatch.entry()}<details class="disclosure mm-legacy" ${active?'open':''}><summary>Подбор по вкусам — оценить знакомые фильмы</summary><section class="shared-entry shared-hero" aria-labelledby="shared-home-title"><p class="eyebrow">Кино для двоих</p><h1 id="shared-home-title">${active?esc(title):'Что посмотрим вместе?'}</h1><p class="lede">Каждый задаёт настроение и оценивает знакомые фильмы. Tonight предлагает варианты с учётом вас обоих.</p><button class="button large" data-action="continue-session">${active?esc(cta):'Выбрать вместе'}</button>${!active?'<div class="quick-entry"><button class="button ghost" data-view="quick">Выбрать готовый сценарий</button><p class="hint">«Устали» или «Поздно»: зададим условия вечера и перейдём к оценке знакомых фильмов.</p></div>':''}</section></details>
+    ${temporaryExclusions()}<section class="other-modes" aria-labelledby="other-modes-title"><h2 id="other-modes-title">Другие способы выбрать</h2><div class="mode-grid">${tonightEntry()}${rouletteEntry()}<section class="tinder-entry"><div><h3>Кино-Tinder</h3><p>Отмечайте интересные фильмы по одному — подбор будет учиться на ваших ответах.</p></div><button class="button secondary" data-tinder-open>Листать фильмы</button></section></div></section>
     ${job && ['running','error'].includes(job.phase)?`<aside class="status-card" role="status"><p>${esc(job.message || 'Загрузка каталога')}</p><button class="button secondary" data-view="library">Открыть каталог</button></aside>`:''}
-    ${personalSection()}<details class="disclosure"><summary>Подключить телефон и пригласить зрителя</summary>${inviteCard()}<div class="presence">${participantLine('lera')}${participantLine('nikita')}</div></details>`);
+    ${smartSearch.entry()}${personalSection()}<details class="disclosure"><summary>Подключить телефон и пригласить зрителя</summary>${inviteCard()}<div class="presence">${participantLine('lera')}${participantLine('nikita')}</div></details>`);
 
 }
 
@@ -326,7 +332,7 @@ function discoveryCard(movie, reason, action = 'select-personal') {
 
 function personalSection() {
   const data = state.personalUser === state.user ? state.personal : null;
-  return `<section aria-labelledby="personal-title"><h2 id="personal-title" class="section-title">Подобрано для тебя</h2><p class="action-help">«Выбрать на сегодня» откроет экран вечера. Просмотр отметите отдельно.</p><p class="lede">${data?.cold_start ? 'Начнём со знакомства: пока личных оценок мало. Отмечайте фильмы — подборка начнёт учитывать ваш вкус.' : 'По вашим оценкам, реакциям и выбранным предпочтениям.'}</p>${state.personalError ? `<p role="status">${esc(state.personalError)}</p><button class="button secondary" data-action="retry-personal">Повторить</button>` : !data ? '<p role="status">Подбираем фильмы…</p>' : data.items.length ? `<div class="history-grid">${data.items.map(movie => discoveryCard(movie, movie.recommendation_reason)).join('')}</div>${data.limited ? '<p class="hint">Подходящих фильмов пока немного. Оцените ещё фильмы или проверьте выбранные ограничения.</p>' : ''}` : '<div class="empty">Пока нет подходящих фильмов. Проверьте ограничения или обновите каталог.</div>'}</section>`;
+  return `<section aria-labelledby="personal-title"><h2 id="personal-title" class="section-title">Подобрано для тебя</h2><p class="action-help">«Выбрать на сегодня» откроет экран вечера. Просмотр отметите отдельно.</p><p class="lede">${data?.cold_start ? 'Начнём со знакомства: пока личных оценок мало. Отмечайте фильмы — подборка начнёт учитывать ваш вкус.' : 'По вашим оценкам, реакциям и выбранным предпочтениям.'}</p>${state.personalError ? `<p role="status">${esc(state.personalError)}</p><button class="button secondary" data-action="retry-personal">Повторить</button>` : !data ? '<p role="status">Подбираем фильмы…</p>' : data.items.length ? `<div class="history-grid">${data.items.map(movie => discoveryCard(movie, movie.recommendation_reason)).join('')}</div>${data.limited ? '<p class="hint">Подходящих фильмов пока немного. Оцените ещё фильмы или проверьте выбранные ограничения.</p>' : ''}` : `<div class="empty">Пока нет подходящих фильмов. Проверьте ограничения или обновите каталог.${exclusionEmptyHelp()}</div>`}</section>`;
 }
 
 async function refreshPersonal() {
@@ -391,7 +397,7 @@ function renderSwipe() {
       <div class="shared-film"><div class="shared-poster">${poster(movie)}</div><div class="shared-film-copy"><h2>${esc(movie.title)}</h2><p class="meta">${movie.year} · ${movie.runtime} мин<br>${esc(movie.genres.join(' · '))}</p><p class="shared-synopsis">${esc(tonightSynopsis(movie))}</p></div></div>
       <div class="reaction-row" aria-label="Впечатление от просмотренного фильма">${reactionMap.map(([id,e,label]) => `<button class="reaction" data-reaction="${id}" title="${label}"><span class="reaction-icon" aria-hidden="true">${e}</span><span>${label}</span></button>`).join('')}</div>
       <p class="action-help">Ответы сохраняются для вашего профиля и помогают подбору для двоих.</p>
-      <details class="shared-help"><summary>Зачем оценивать знакомые фильмы?</summary><p>Так Tonight узнаёт ваш вкус. Здесь оценивают прошлый просмотр, а не желание посмотреть фильм. Оба зрителя отвечают отдельно.</p><p class="keyboard-hint">← не понравился · ↑ очень понравился · → понравился · ↓ нормальный · ? не смотрел(а)</p></details>
+      <details class="shared-help"><summary>Зачем оценивать знакомые фильмы?</summary><p>Так Tonight узнаёт ваш вкус. Здесь оценивают прошлый просмотр, а не желание посмотреть фильм. Оба зрителя отвечают отдельно.</p></details>
       ${movie.overview ? descriptionDisclosure(movie.overview, movie.id, 'card-description') : ''}
     </article></div></section>`);
 }
@@ -411,7 +417,7 @@ function descriptionDisclosure(description, movieId, className = 'movie-descript
 }
 
 function renderNoAvailableMovies() {
-  return shell(`<section class="empty"><h2>Пока нет фильмов для выбора</h2><p>Нужно подтверждённое русское название и состоявшийся прокат. Записи каталога и ваша история сохранены.</p><p class="hint">Проверьте обновление каталога на основном компьютере или измените ограничения вечера.</p><button class="button secondary" data-view="home">На главный экран</button></section>`);
+  return shell(`<section class="empty"><h2>Пока нет фильмов для выбора</h2><p>Сочетание исключений и условий вечера не оставило доступных фильмов. Нужны подтверждённый прокат и русское название; неизвестные обязательные характеристики исключаем.</p><p class="hint">Проверьте обновление каталога на основном компьютере или измените ограничения вечера.</p>${exclusionEmptyHelp()}<div class="footer-actions"><button class="button secondary" data-view="filters">Изменить условия вечера</button><button class="button ghost" data-view="taste">Изменить постоянные исключения</button><button class="button ghost" data-view="home">На главный экран</button></div></section>`);
 }
 
 function movieDescription(description, movieId = '') {
@@ -488,7 +494,7 @@ function renderHistory() {
 
 function renderWeekly() {
   const items = state.weeklyPicks || [];
-  return shell(`<section><div class="screen-head"><p class="eyebrow">Пять на неделю ✦</p><h2>Можно выбрать без долгих поисков</h2><p class="lede">Короткая локальная подборка для вас двоих. Она обновится на следующей неделе.</p><p class="hint">Tonight ничего не отправляет сам — подборка ждёт здесь, когда понадобится.</p></div>${items.length ? `<div class="history-grid">${items.map(movie => discoveryCard(movie, movie.weekly_reason, 'select-weekly')).join('')}</div>` : '<div class="empty"><h3>Пока подбираем варианты</h3><p>Откройте экран ещё раз через минуту.</p></div>'}</section>`);
+  return shell(`<section><div class="screen-head"><p class="eyebrow">Пять на неделю ✦</p><h2>Можно выбрать без долгих поисков</h2><p class="lede">Короткая локальная подборка для вас двоих. Она обновится на следующей неделе.</p><p class="hint">Tonight ничего не отправляет сам — подборка ждёт здесь, когда понадобится.</p></div>${items.length ? `<div class="history-grid">${items.map(movie => discoveryCard(movie, movie.weekly_reason, 'select-weekly')).join('')}</div>` : `<div class="empty"><h3>Нет подходящих вариантов на неделю</h3><p>Проверьте ограничения или пополните каталог. Правила сохранены.</p>${exclusionEmptyHelp()}</div>`}</section>`);
 }
 
 function renderFranchises() {
@@ -521,8 +527,9 @@ function renderWatchlist() {
 }
 
 function renderSearch() {
+  if (!smartSearch.isTitle()) return shell(`${smartSearch.tabs()}${smartSearch.content()}`);
   const items = state.searchResults || [];
-  return shell(`<section><div class="screen-head"><p class="eyebrow">Поиск по примеру</p><h2>На что похоже настроение?</h2><p class="lede">Напишите название, жанр или деталь — например, «Как Достать ножи» или «смешное на полтора часа».</p></div><form class="search-form" data-action="search-catalog"><input name="query" value="${esc(state.searchQuery)}" placeholder="Название или пример фильма" maxlength="100"><button class="button" type="submit">Найти</button></form>${state.searchQuery ? (items.length ? `<div class="history-grid">${items.map(movie => `<article class="history-card">${poster(movie)}<h3>${esc(movie.title)}</h3><p class="hint">${movie.year} · ${esc(movie.genres.join(' · '))}</p><p class="hint">${esc(movie.overview)}</p><div class="footer-actions">${trailerButton(movie, 'button secondary')}<button class="button secondary" data-action="select-search-result" data-movie-id="${movie.id}">Выбрать на сегодня</button></div></article>`).join('')}</div>` : '<div class="empty"><p>В локальном каталоге ничего похожего не нашли. Попробуйте название или более короткий запрос.</p></div>') : ''}</section>`);
+  return shell(`${smartSearch.tabs()}<section><div class="screen-head"><p class="eyebrow">Поиск по названию</p><h2>Как называется фильм?</h2><p class="lede">Найдите знакомый фильм в локальном каталоге.</p></div><form class="search-form" data-action="search-catalog"><input name="query" value="${esc(state.searchQuery)}" placeholder="Название фильма" maxlength="100"><button class="button" type="submit">Найти</button></form>${state.searchQuery ? (items.length ? `<div class="history-grid">${items.map(movie => `<article class="history-card">${poster(movie)}<h3>${esc(movie.title)}</h3><p class="hint">${movie.year} · ${esc(movie.genres.join(' · '))}</p><p class="hint">${esc(movie.overview)}</p><div class="footer-actions">${trailerButton(movie, 'button secondary')}<button class="button secondary" data-action="select-search-result" data-movie-id="${movie.id}">Выбрать на сегодня</button></div></article>`).join('')}</div>` : '<div class="empty"><p>В локальном каталоге ничего не нашли. Попробуйте другое название.</p></div>') : ''}</section>`);
 }
 
 function renderTaste() {
@@ -533,6 +540,7 @@ function renderTaste() {
   const latestBackup = backups[0] ? `Последняя копия: ${new Date(backups[0].created_at).toLocaleString('ru-RU', {dateStyle:'medium', timeStyle:'short'})}.` : 'Последней копии пока нет.';
   const backupList = backups.length ? `<div class="backup-list">${backups.slice(0,5).map(item => `<article><div><strong>${new Date(item.created_at).toLocaleString('ru-RU', {dateStyle:'medium', timeStyle:'short'})}</strong><p>${Math.max(1, Math.round(item.bytes / 1024))} КБ</p></div><div class="footer-actions"><a class="button ghost small" href="/api/backups/${encodeURIComponent(item.name)}/download">Скачать</a><button class="button ghost small" data-action="restore-backup" data-backup-name="${esc(item.name)}">Восстановить</button></div></article>`).join('')}</div>` : '<div class="empty compact"><p>Копий пока нет.</p></div>';
   return shell(`<section><div class="screen-head"><p class="eyebrow">Профили зрителей</p><h2>Наш вкус</h2><p class="lede">Не сумма двух профилей, а то, что особенно хорошо работает именно вместе.</p></div>
+    ${permanentExclusions()}
     ${data.enough_data ? `<div class="taste-columns">${column('🍿 Первый зритель','lera')}${column('🎬 Второй зритель','nikita')}${column('✨ Наш вайб','pair')}</div>` : `<div class="empty"><h3>Посмотрим ещё несколько фильмов</h3><p>После трёх совместных оценок здесь появятся честные закономерности 🍿</p><strong>Уже вместе: ${data.watched}</strong></div>`}
     <details class="disclosure profile-actions"><summary>Tonight IQ · управление обучением</summary><p class="lede">Если выводы Tonight стали неактуальны, начните обучение заново. История просмотров и ваши оценки останутся на месте.</p><button class="button ghost" data-action="reset-taste-profile">Начать заново</button></details>
     ${!isRemoteClient() ? `<details class="disclosure profile-actions"><summary>Резервные копии и перенос данных</summary><p class="lede">Скачайте данные, чтобы перенести их на другой компьютер или сохранить отдельно. Перед восстановлением Tonight автоматически сделает страховочную копию текущих данных.</p><p class="hint">${latestBackup}</p><div class="footer-actions"><button class="button ghost" data-action="create-backup">Создать копию</button><button class="button ghost" data-action="export-data">Скачать данные</button></div><div class="backup-import"><label>Восстановить из файла <input type="file" data-backup-import accept=".db,application/vnd.sqlite3"></label><button class="button secondary" data-action="import-backup" disabled>Восстановить из файла</button></div>${backupList}</details>` : ''}
@@ -632,6 +640,7 @@ function refreshWatchlistResults() {
 
 function bindCommon() {
   bindPosters();
+  smartSearch.bind();
   root.querySelectorAll('details').forEach(el=>el.addEventListener('keydown',e=>{if(e.key==='Escape' && el.open){e.stopPropagation();el.open=false;el.querySelector('summary')?.focus();}}));
   root.querySelectorAll('[data-view]').forEach(el=>{if(el.dataset.view===state.view || el.dataset.view==='library' && state.view==='catalog')el.setAttribute('aria-current','page');});
   bindExpansion();
@@ -713,7 +722,7 @@ function bindCommon() {
   root.querySelector('[data-action="skip-evening-feedback"]')?.addEventListener('click', () => go('history'));
   const searchInput = root.querySelector('[data-action="search-catalog"] input[name="query"]');
   if (searchInput) {
-    searchInput.setAttribute('aria-label', 'Название или пример фильма');
+    searchInput.setAttribute('aria-label', 'Название фильма');
     searchInput.value = state.searchDraft ?? state.searchQuery;
     searchInput.addEventListener('input', event => { state.searchDraft = event.target.value; });
   }
@@ -731,6 +740,7 @@ function joinBody(user) {
 }
 
 async function go(view) {
+  smartSearch.cancel();
   const request = ++state.navigationRequest;
   const previousView = state.view;
   state.modal = null;
@@ -761,6 +771,7 @@ async function startQuickEvening(id) {
 
 async function selectUser(user) {
   try {
+    state.exclusionDraft={};state.exclusionError='';
     state.user = user; localStorage.setItem('tonight:user', user);
     await api(`/api/sessions/${state.session.id}/join`, {method:'POST', body:joinBody(user)});
     if (isRemoteClient()) sessionStorage.setItem('tonight:access-code', state.accessCode);
@@ -770,6 +781,7 @@ async function selectUser(user) {
 }
 
 function switchUser() {
+  smartSearch.cancel();
   clearTimeout(state.reconnectTimer); state.reconnectTimer=null;
   state.ws?.close(); state.ws=null; state.user=null; state.accessCode=''; state.prefs=defaultPrefs(); state.deck=[]; localStorage.removeItem('tonight:user'); sessionStorage.removeItem('tonight:access-code'); state.view='home'; render();
 }
@@ -1031,6 +1043,7 @@ function forgetLocalViewer() {
   try { for(const key of ['lera','nikita']) { sessionStorage.removeItem(`tonight:mode:${key}`); sessionStorage.removeItem(`tonight:tinder:${key}`); sessionStorage.removeItem(`tonight:roulette:${key}`); } } catch (_) {}
   state.roulette=null;state.rouletteRequest++;
   state.tonight=null;state.tonightRequest++;state.tinder=null;state.tinderRequest++;
+  state.exclusions=null;state.exclusionsFor=null;state.exclusionsAt=0;state.exclusionDraft={};
   state.user = null;
   state.accessCode = '';
   localStorage.removeItem('tonight:user');
@@ -1155,6 +1168,7 @@ function renderDeferDialog() {
 
 function applyRealtimeSession(nextSession) {
   state.personalAt = 0; state.personalRevision++;
+  if(nextSession && (state.session?.id!==nextSession.id || state.session?.status!==nextSession.status && nextSession.status==='completed')){state.exclusionsAt=0;invalidateExclusionResults();}
   if (!nextSession) return;
   if (nextSession.status === 'abandoned') { followRestartedSession(); return; }
   const previousStatus = state.session?.status;
@@ -1195,7 +1209,7 @@ function connectWs() {
   state.ws?.close();
   const protocol=location.protocol==='https:'?'wss':'ws'; const accessQuery=isRemoteClient() && state.accessCode ? `?code=${encodeURIComponent(state.accessCode)}` : ''; const ws=new WebSocket(`${protocol}://${location.host}/ws/session/${state.session.id}/${state.user}${accessQuery}`); state.ws=ws;
   ws.onopen=()=>{const recovered=state.wasDisconnected; ws.pinger=setInterval(()=>{if(ws.readyState===1)ws.send('ping')},20000); restoreAfterReconnect(ws,recovered);};
-  ws.onmessage=e=>{ const data=JSON.parse(e.data); if(data.type==='personal_changed'){state.personalAt=0;state.personalRevision++;if(state.view==='home')refreshPersonal();return;} if(data.type==='privacy_reset'){forgetLocalViewer();state.ws=null;toast('Личные данные удалены на основном компьютере');setTimeout(()=>location.reload(),700);return;} if(!data.presence && !data.session) return; if(data.presence)state.presence=data.presence; if(data.session)applyRealtimeSession(data.session); renderRealtime(); };
+  ws.onmessage=e=>{ const data=JSON.parse(e.data); if(data.type==='exclusions_changed'){if(data.session)applyRealtimeSession(data.session);exclusionsChanged().catch(e=>toast(e.message));return;} if(data.type==='personal_changed'){state.personalAt=0;state.personalRevision++;if(state.view==='home')refreshPersonal();return;} if(data.type==='privacy_reset'){forgetLocalViewer();state.ws=null;toast('Личные данные удалены на основном компьютере');setTimeout(()=>location.reload(),700);return;} if(!data.presence && !data.session) return; if(data.presence)state.presence=data.presence; if(data.session)applyRealtimeSession(data.session); renderRealtime(); };
   ws.onerror=()=>{};
   ws.onclose=event=>{clearInterval(ws.pinger); if(state.ws!==ws)return; if(event.code===1008 && isRemoteClient()){state.user=null;state.accessCode='';localStorage.removeItem('tonight:user');sessionStorage.removeItem('tonight:access-code');state.view='home';toast('Нужен код с экрана Tonight');render();return;} state.connected=false;state.wasDisconnected=true;renderRealtime();const delay=Math.min(12000,1200*(2**Math.min(state.reconnectAttempts,3)));state.reconnectAttempts+=1;state.reconnectTimer=setTimeout(()=>{if(state.user&&state.ws===ws)connectWs();},delay);};
 }
@@ -1214,6 +1228,8 @@ async function openPendingFeedback() {
 }
 
 async function init() {
+  if(!init.exclusionTimer)init.exclusionTimer=setInterval(()=>{if(state.user && state.view!=='match')refreshExclusions();},30000);
+  if(await movieMatch.resume())return;
   state.view='loading'; render();
   try {
     [state.setup,state.session,state.invite]=await Promise.all([api('/api/setup/status'),api('/api/sessions/active'),api('/api/invite')]);
@@ -1389,7 +1405,7 @@ function renderTonight() {
     const content=[()=>tonightChoices('mood',tonightMoods),()=>tonightChoices('max_runtime',[[90,'До 90 минут'],[120,'До 120 минут'],[150,'До 150 минут'],[null,'Неважно']]),()=>tonightChoices('company',tonightCompanies),()=>`<div class="tonight-options"><label>Минимальный рейтинг <select data-tm-input="min_rating">${[0,6,7,8,9].map(n=>`<option value="${n}" ${f.min_rating===n?'selected':''}>${n?`${n} / 10`:'Неважно'}</option>`).join('')}</select></label>${tonightYearControls(t)}<fieldset><legend>Исключить жанры</legend><div class="chip-grid">${[...new Set([...genres,'семейный','приключения','криминал','история','музыка','военный','вестерн'])].map(g=>`<button class="chip ${f.excluded_genres.includes(g)?'selected':''}" data-tm-genre="${g}" aria-pressed="${f.excluded_genres.includes(g)}">${g}</button>`).join('')}</div></fieldset><label class="tonight-check"><input type="checkbox" data-tm-watched ${f.exclude_watched?'checked':''}> Исключить просмотренные фильмы</label><p class="hint">Сложность сюжета не оцениваем: в каталоге нет надёжных данных.</p></div>`][t.step]();
     body=`${nav}<div class="tonight-stage" key="${t.step}"><h2 tabindex="-1" data-tm-heading>${titles[t.step]}</h2><p class="lede">${t.step===3?'Все параметры на этом шаге необязательны.':t.step===2?'Вдвоём учитываем вкус обоих зрителей. Для друзей — ваш вкус; для семьи — семейные жанры. Это не возрастной допуск.':''}</p>${content}<div class="footer-actions"><button class="button ghost" data-tm-back>${t.step?'← Назад':'На главную'}</button><button class="button" data-tm-next ${t.busy?'disabled':''}>${t.data?'Применить изменения':t.step===3?'Подобрать фильмы':'Далее →'}</button>${t.data?'<button class="button ghost" data-tm-cancel>Отменить изменения</button>':''}</div></div>`;
   } else {
-    body=`${nav}<div class="screen-head"><h2 tabindex="-1" data-tm-results>Ваши варианты на вечер.</h2><p class="lede">${t.data?.cold_start?'Пока знакомимся с вашим вкусом: учитываем настроение и данные каталога.':'По оценкам зрителей и условиям этого вечера.'}</p><p class="hint">${esc(tonightMoods.find(m=>m[0]===f.mood)?.[2] || '')} · ${f.max_runtime?`до ${f.max_runtime} мин`:'любая длительность'} · ${esc(tonightCompanies.find(c=>c[0]===f.company)?.[1] || '')}. Нажмите на нужный шаг выше, чтобы изменить условия.</p></div>${t.busy?'<div class="empty" role="status">Tonight IQ подбирает фильмы…</div>':`${t.data?.limited?`<aside class="tonight-empty" role="status"><h3>${t.data.items.length?`Нашлось ${t.data.items.length} из 5 вариантов`:'Подходящие варианты закончились'}</h3><p>${t.data.exhausted?'Уже показанные фильмы исключены из повторного подбора. ':''}${t.data.catalog_available===0?'В каталоге пока нет фильмов с подтверждёнными данными о прокате. Обновите каталог в разделе «Каталог».':'Сочетание условий, истории просмотров и исключений оставляет мало фильмов. Измените условия или снимите исключение просмотренных.'} Ограничения сохранены.</p><div class="footer-actions">${(t.data.relaxations || []).map(r=>`<button class="button secondary" data-tm-relax="${r.field}">Ослабить: ${esc(r.label)} · до ${r.available} вариантов</button>`).join('')}<button class="button ghost" data-tm-step="3">Изменить фильтры</button>${t.seen.length?'<button class="button ghost" data-tm-repeat>Вернуться к уже показанным</button>':''}</div></aside>`:''}<p class="action-help">«Выбрать на сегодня» откроет экран вечера. Начало и завершение просмотра отмечаются отдельно.</p><div class="tonight-films">${(t.data?.items || []).map(m=>tonightCard(m)).join('')}</div><div class="footer-actions"><button class="button" data-tm-more ${!t.data?.items.length?'disabled':''}>Другие варианты ↻</button><button class="button ghost" data-view="home">На главную</button></div>`}`;
+    body=`${nav}<div class="screen-head"><h2 tabindex="-1" data-tm-results>Ваши варианты на вечер.</h2><p class="lede">${t.data?.cold_start?'Пока знакомимся с вашим вкусом: учитываем настроение и данные каталога.':'По оценкам зрителей и условиям этого вечера.'}</p><p class="hint">${esc(tonightMoods.find(m=>m[0]===f.mood)?.[2] || '')} · ${f.max_runtime?`до ${f.max_runtime} мин`:'любая длительность'} · ${esc(tonightCompanies.find(c=>c[0]===f.company)?.[1] || '')}. Нажмите на нужный шаг выше, чтобы изменить условия.</p></div>${t.busy?'<div class="empty" role="status">Tonight IQ подбирает фильмы…</div>':`${t.data?.limited?`<aside class="tonight-empty" role="status"><h3>${t.data.items.length?`Нашлось ${t.data.items.length} из 5 вариантов`:'Подходящие варианты закончились'}</h3><p>${t.data.exhausted?'Уже показанные фильмы исключены из повторного подбора. ':''}${t.data.catalog_available===0?'В каталоге пока нет фильмов с подтверждёнными данными о прокате. Обновите каталог в разделе «Каталог».':'Сочетание условий, истории просмотров и исключений оставляет мало фильмов. Измените условия или снимите исключение просмотренных.'} Ограничения сохранены.</p>${!t.data.items.length?exclusionEmptyHelp():''}<div class="footer-actions">${(t.data.relaxations || []).map(r=>`<button class="button secondary" data-tm-relax="${r.field}">Ослабить: ${esc(r.label)} · до ${r.available} вариантов</button>`).join('')}<button class="button ghost" data-tm-step="3">Изменить фильтры</button>${t.seen.length?'<button class="button ghost" data-tm-repeat>Вернуться к уже показанным</button>':''}</div></aside>`:''}<p class="action-help">«Выбрать на сегодня» откроет экран вечера. Начало и завершение просмотра отмечаются отдельно.</p><div class="tonight-films">${(t.data?.items || []).map(m=>tonightCard(m)).join('')}</div><div class="footer-actions"><button class="button" data-tm-more ${!t.data?.items.length?'disabled':''}>Другие варианты ↻</button><button class="button ghost" data-view="home">На главную</button></div>`}`;
   }
   return shell(`<section class="tonight-mode" aria-busy="${!!t.busy}"><p class="eyebrow">Подбор на вечер</p>${t.error?`<p role="alert" class="constraint-warning">${esc(t.error)}</p>`:''}${body}</section>`);
 }
@@ -1497,7 +1513,7 @@ function renderTinder(){
     <article class="tinder-card" data-kt-card tabindex="0" aria-label="${esc(m.title)}">
       <div class="tinder-image">${poster(m)}<span class="tinder-direction" aria-hidden="true"></span></div>
       <div class="tinder-copy">${details}<p>${esc(tonightSynopsis(m))}</p><button class="button ghost" data-kt-details>Подробнее о фильме</button></div>
-    </article><div class="tinder-action-panel"><div class="tinder-controls" aria-label="Действия с фильмом">${[['dislike','←','Не интересно'],['watched','↑','Уже смотрел'],['interest','→','Интересно']].map(([action,icon,label])=>`<button class="button ${action==='interest'?'':'secondary'}" data-kt-action="${action}" ${disabled}><span aria-hidden="true">${icon}</span> ${label}</button>`).join('')}${undo}</div></div>`:`<div class="empty" role="status"><h2>${t.busy?'Подбираем фильмы…':'Фильмы закончились'}</h2><p>${t.busy?'Учитываем ваш вкус.':t.catalogAvailable===0?'В каталоге нет подтверждённых фильмов. Откройте каталог для обновления.':'Доступные варианты просмотрены. Новая сессия учитывает сохранённые действия.'}</p>${!t.busy?'<button class="button" data-kt-new>Новая сессия</button><button class="button ghost" data-view="library">Каталог</button>':''}${undo}</div>`}
+    </article><div class="tinder-action-panel"><div class="tinder-controls" aria-label="Действия с фильмом">${[['dislike','←','Не интересно'],['watched','↑','Уже смотрел'],['interest','→','Интересно']].map(([action,icon,label])=>`<button class="button ${action==='interest'?'':'secondary'}" data-kt-action="${action}" ${disabled}><span aria-hidden="true">${icon}</span> ${label}</button>`).join('')}${undo}</div></div>`:`<div class="empty" role="status"><h2>${t.busy?'Подбираем фильмы…':'Фильмы закончились'}</h2><p>${t.busy?'Учитываем ваш вкус.':t.catalogAvailable===0?'В каталоге нет подтверждённых фильмов. Откройте каталог для обновления.':'Доступные варианты просмотрены. Новая сессия учитывает сохранённые действия.'}</p>${!t.busy?exclusionEmptyHelp():''}${!t.busy?'<button class="button" data-kt-new>Новая сессия</button><button class="button ghost" data-view="library">Каталог</button>':''}${undo}</div>`}
     <p class="sr-only" aria-live="polite">${m?`Следующий фильм: ${esc(m.title)}`:'Нет карточки'}</p></section>`,{narrow:true});
 }
 
@@ -1598,7 +1614,7 @@ function renderRoulette(){
   ${r.acceptedTitle&&r.accepted!==m?.id?`<p class="tonight-reason">Выбрано в этой вкладке: ${esc(r.acceptedTitle)}</p>`:''}
   ${!m?`<button class="button large roulette-launch" data-r-launch ${locked?'disabled':''}>${r.busy?'Подбираем фильм…':'Реши за меня'}</button>`:''}
   ${r.error?`<p class="error" role="alert">${esc(r.error)}</p>`:''}
-  ${r.empty?`<div class="empty" role="status"><h2>${r.watchlistCount===0?'В списке пока пусто':'Подходящие фильмы закончились'}</h2><p>${r.watchlistCount===0?'Добавьте фильмы в «На потом» или выберите другой режим.':'Измените быстрые ограничения или сохранённые ограничения профиля. Уже предложенные в этой сессии фильмы исключены; ограничения сохранены.'}</p></div>`:''}
+  ${r.empty?`<div class="empty" role="status"><h2>${r.watchlistCount===0?'В списке пока пусто':'Подходящие фильмы закончились'}</h2><p>${r.watchlistCount===0?'Добавьте фильмы в «На потом» или выберите другой режим.':'Измените быстрые ограничения или сохранённые ограничения профиля. Уже предложенные в этой сессии фильмы исключены; ограничения сохранены.'}</p>${exclusionEmptyHelp()}</div>`:''}
   ${r.spinning&&m?rouletteDraw(m):m?`<article class="roulette-result" aria-busy="${!!r.spinning}"><div class="roulette-poster">${poster(m)}</div><div class="roulette-copy"><p class="eyebrow">${tonightRating(m)}</p><h2 tabindex="-1" data-r-title>${esc(m.title)}</h2><p class="hint">${m.year||'Год не указан'} · ${m.runtime?`${m.runtime} мин`:'Длительность не указана'}</p><p class="hint">${esc((m.genres||[]).join(' · '))}</p><p class="roulette-synopsis">${esc(tonightSynopsis(m))}</p><p class="tonight-reason">✦ ${esc(m.recommendation_reason)}</p><div class="tonight-film-actions"><button class="button" data-r-accept ${r.accepted===m.id||r.busy?'disabled':''}>${r.accepted===m.id?'✓ Выбрано в этой вкладке':'Выбрать в этой вкладке'}</button><button class="button secondary" data-r-launch>Другой фильм</button><button class="button secondary" data-r-action="watchlist" ${m.saved||r.busy?'disabled':''}>${m.saved?'✓ В списке':'Сохранить на потом'}</button><button class="button ghost" data-r-action="dislike" ${r.busy?'disabled':''}>Не интересно</button></div>${m.overview?descriptionDisclosure(m.overview,m.id,'roulette-description'):''}<p class="hint">Выбор сохранится только в этой вкладке рулетки. «Сохранить на потом» добавляет фильм в общий список. Ни одно из этих действий не отмечает просмотр.</p></div></article>`:''}</section>`);
 }
 function finishRoulette(r){
@@ -1649,4 +1665,300 @@ function bindRoulette(){
   root.querySelectorAll('[data-r-action]').forEach(el=>el.addEventListener('click',()=>rouletteAction(el.dataset.rAction)));
 }
 
+// Hard rules share the server's evening across modes and connected devices.
+const exclusionLabels = {movie:'Фильм',genre:'Жанр',keyword:'Тема',director:'Режиссёр',max_runtime:'Длительность',watched:'Просмотренное'};
+function exIcon(name) {
+  const paths={moon:'M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z',ban:'M8 8l8 8M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',plus:'M12 5v14M5 12h14',check:'m5 12 4 4L19 6',close:'m6 6 12 12M6 18 18 6',search:'m21 21-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z',clock:'M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',eye:'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Zm10-3a3 3 0 1 0 0 6 3 3 0 0 0 0-6',chevron:'m8 10 4 4 4-4',film:'M4 3h16v18H4zM4 8h16M4 16h16M8 3v18M16 3v18',spark:'m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z'};
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name] || paths.ban}"/></svg>`;
+}
+function exclusionData() {
+  return state.exclusions?.user===state.user && state.exclusionsFor===state.session?.id ? state.exclusions : null;
+}
+function ruleLabel(rule) {
+  if(rule.kind==='max_runtime')return `До ${rule.value} минут`;
+  if(rule.kind==='watched')return 'Без просмотренного';
+  return rule.title || rule.value;
+}
+function exTodayLabel(rule) {
+  if(rule.kind==='genre')return rule.value==='хоррор'?'Без ужасов':rule.value==='драма'?'Без драм':`Без «${rule.value}»`;
+  if(rule.kind==='keyword')return `Без темы «${rule.value}»`;
+  if(rule.kind==='movie')return `Без «${rule.title || rule.value}»`;
+  if(rule.kind==='director')return `Без фильмов: ${rule.value}`;
+  return ruleLabel(rule);
+}
+function exDraft(scope) {
+  state.exclusionDraft ||= {};
+  return state.exclusionDraft[scope] ||= {kind:'genre',value:'',open:false};
+}
+function exSuggestions(scope) {
+  const data=exclusionData(),draft=exDraft(scope),kind=draft.kind,rules=data?.[scope] || [];
+  const chosen=value=>rules.some(r=>r.kind===kind&&r.value===value);
+  const button=(value,label,subtitle='')=>`<button type="button" class="ex-pick ${chosen(value)?'is-chosen':''}" data-ex-pick="${esc(value)}" data-ex-kind-value="${kind}" aria-pressed="${chosen(value)}" ${state.exclusionBusy?'disabled':''}><span>${esc(label)}${subtitle?`<small>${esc(subtitle)}</small>`:''}</span>${exIcon(chosen(value)?'check':'plus')}</button>`;
+  if(kind==='movie')return draft.results?draft.results.length?draft.results.map(m=>button(m.id,m.title,String(m.year))).join(''):'<p class="ex-note">Ничего не нашли. Попробуйте другое название.</p>':'<p class="ex-note">Найдите фильм по названию — он останется доступен в каталоге.</p>';
+  if(kind==='max_runtime')return `<div class="ex-time-presets">${['90','120','150','180'].map(v=>button(v,`До ${v} мин`)).join('')}</div><form data-ex-time="${scope}" class="ex-custom-time"><label>Свой лимит, мин<input type="number" min="1" max="1440" required placeholder="Например, 100"></label><button class="button secondary" ${state.exclusionBusy?'disabled':''}>Применить</button></form>`;
+  if(kind==='watched')return button('true','Без просмотренного','По вашей истории и отметкам «Уже смотрел»');
+  const query=draft.value.trim().toLocaleLowerCase('ru');
+  const choices=(data?.options[kind] || []).filter(v=>v.toLocaleLowerCase('ru').includes(query));
+  return choices.length?choices.slice(0,kind==='genre'?40:16).map(v=>button(v,v)).join(''):'<p class="ex-note">Такой характеристики в каталоге пока нет.</p>';
+}
+function exclusionEditor(scope) {
+  const data=exclusionData();if(!data)return '<p class="ex-note" role="status">Загружаем исключения…</p>';
+  const allRules=data[scope] || [],draft=exDraft(scope),kind=draft.kind;
+  const quickRule=r=>(r.kind==='genre'&&['хоррор','драма'].includes(r.value))||(r.kind==='max_runtime'&&r.value==='120')||r.kind==='watched';
+  const rules=scope==='temporary'?allRules.filter(r=>!quickRule(r)):allRules;
+  const tabs=[['genre','Жанры'],['movie','Фильмы'],['keyword','Темы'],['other','Ещё']];
+  const other=['director','max_runtime','watched'].includes(kind);
+  return `<div class="ex-rule-list">${rules.length?rules.map((r,i)=>`<div class="ex-rule ${r.kind==='movie'?'ex-rule-film':''}"><span class="ex-rule-symbol">${exIcon(r.kind==='movie'?'film':r.kind==='max_runtime'?'clock':r.kind==='watched'?'eye':'ban')}</span><span class="ex-rule-copy"><strong>${esc(ruleLabel(r))}</strong><small>${exclusionLabels[r.kind]}</small></span><button class="ex-remove" data-ex-remove="${allRules.indexOf(r)}" data-ex-scope="${scope}" aria-label="Убрать: ${esc(ruleLabel(r))}" ${state.exclusionBusy?'disabled':''}>${exIcon('close')}</button></div>`).join(''):scope==='permanent'?`<div class="ex-empty"><span>${exIcon('spark')}</span><div><strong>Пока открыты всему</strong><p>Добавьте то, что не хотите видеть в рекомендациях.</p></div></div>`:''}</div>
+  ${draft.open?`<div class="ex-composer" data-ex-composer="${scope}"><div class="ex-composer-head"><strong>${scope==='permanent'?'Что больше не предлагать?':'Что исключим на этот вечер?'}</strong><button class="ex-remove" data-ex-composer-close="${scope}" aria-label="Закрыть добавление">${exIcon('close')}</button></div><div class="ex-tabs" role="group" aria-label="Вид исключения">${tabs.map(([k,label])=>`<button class="ex-tab ${k===kind||k==='other'&&other?'active':''}" data-ex-category="${k}" data-ex-scope="${scope}" aria-pressed="${k===kind||k==='other'&&other}">${label}</button>`).join('')}</div>
+  ${other?`<div class="ex-subtabs">${[['director','Режиссёр'],['max_runtime','Длительность'],['watched','Просмотренное']].map(([k,label])=>`<button class="ex-tab ${kind===k?'active':''}" data-ex-category="${k}" data-ex-scope="${scope}">${label}</button>`).join('')}</div>`:''}
+  ${!['max_runtime','watched'].includes(kind)?`<form data-ex-search="${scope}" class="ex-search">${exIcon('search')}<input data-ex-query="${scope}" value="${esc(draft.value)}" aria-label="${kind==='movie'?'Название фильма':kind==='genre'?'Найти жанр':kind==='keyword'?'Найти тему':'Найти режиссёра'}" placeholder="${kind==='movie'?'Название фильма…':kind==='genre'?'Найти жанр…':kind==='keyword'?'Например, космос…':'Имя режиссёра…'}" autocomplete="off" maxlength="200">${kind==='movie'?'<button type="submit" class="button small secondary">Найти</button>':''}</form>`:''}
+  <div class="ex-suggestions ${kind==='genre'?'ex-genre-picks':''}" data-ex-suggestions="${scope}">${exSuggestions(scope)}</div>${kind==='keyword'?'<p class="ex-note">Темы берём из каталога; они могут быть указаны на английском.</p>':''}</div>`:`<button class="ex-add" data-ex-composer-open="${scope}">${exIcon('plus')} ${scope==='permanent'?'Добавить исключение':'Другие ограничения'}</button>`}
+  ${allRules.length?`<div class="ex-list-footer"><span>${scope==='permanent'?'Действуют во всех следующих подборах':'Только до конца этого вечера'}</span><button class="ex-text-button" data-ex-clear="${scope}" ${state.exclusionBusy?'disabled':''}>${scope==='temporary'?'Снять все':'Очистить список'}</button></div>`:''}`;
+}
+function temporaryExclusions() {
+  if(!state.user)return '';
+  const data=exclusionData(),rules=data?.temporary || [];
+  const quick=[['genre','хоррор','Без ужасов','Спокойнее сегодня','moon'],['genre','драма','Без драм','Хочется полегче','spark'],['max_runtime','120','До двух часов','Без долгого кино','clock'],['watched','true','Только новое','Без просмотренного','eye']];
+  return `<details class="ex-today" data-disclosure-key="today-exclusions"><summary><span class="ex-today-icon">${exIcon('moon')}</span><span class="ex-today-heading"><strong>Не хочу сегодня</strong><small>${rules.length?rules.slice(0,2).map(exTodayLabel).map(esc).join(' · ')+(rules.length>2?' и ещё…':''):'Настройте подбор под этот вечер'}</small></span><span class="ex-count ${rules.length?'has-rules':''}">${rules.length || 'Без ограничений'}</span><span class="ex-chevron">${exIcon('chevron')}</span></summary><div class="ex-today-body"><div class="ex-today-intro"><p>Сегодня — по вашему настроению</p><span>Вкус Tonight IQ не изменится</span></div>
+  ${state.exclusionError?`<p class="ex-error" role="alert">${esc(state.exclusionError)}</p><button class="ex-text-button" data-ex-retry>Попробовать снова</button>`:''}
+  ${data?.session_id?`<div class="ex-quick-grid">${quick.map(([kind,value,label,hint,icon])=>{const active=rules.some(r=>r.kind===kind&&r.value===value);return `<button class="ex-quick ${active?'selected':''}" data-ex-quick="${kind}" data-ex-value="${value}" aria-pressed="${active}" ${state.exclusionBusy?'disabled':''}><span class="ex-quick-icon">${exIcon(icon)}</span><span><strong>${label}</strong><small>${hint}</small></span><span class="ex-check">${exIcon('check')}</span></button>`;}).join('')}</div>${exclusionEditor('temporary')}<p class="ex-expiry">${exIcon('clock')} До конца вечера или полуночи. Вдвоём учитываются ограничения обоих.</p>`:data?`<div class="ex-empty"><span>${exIcon('moon')}</span><div><strong>Новый вечер — новое настроение</strong><p>Начните новый подбор, чтобы включить временные исключения.</p></div></div><button class="button secondary" data-ex-new>Начать новый вечер</button>`:'<p class="ex-note" role="status">Загружаем настройки вечера…</p>'}
+  <div class="ex-today-footer"><span>Есть то, что не любите вообще?</span><button class="ex-text-button" data-view="taste">Не рекомендовать ${exIcon('plus')}</button></div></div></details>`;
+}
+function exclusionEmptyHelp() {
+  const data=exclusionData();if(!data || !data.permanent.length&&!data.temporary.length)return '';
+  const active=[...data.permanent.map(r=>ruleLabel(r)),...data.temporary.map(exTodayLabel)];
+  return `<div class="ex-empty-help"><p>Сейчас исключено: <strong>${active.slice(0,4).map(esc).join(' · ')}${active.length>4?' и ещё…':''}</strong></p><p>Правила сохранены. Можно изменить одно из них и попробовать снова.</p><div>${data.temporary.length?'<button class="ex-text-button" data-ex-edit-today>Изменить на сегодня</button>':''}${data.permanent.length?'<button class="ex-text-button" data-view="taste">Изменить постоянные</button>':''}</div></div>`;
+}
+function permanentExclusions() {
+  const data=exclusionData();
+  return `<section class="ex-permanent" aria-labelledby="ex-permanent-title"><div class="ex-section-heading"><span class="ex-permanent-icon">${exIcon('ban')}</span><div><p class="eyebrow">Ваш Tonight IQ</p><h2 id="ex-permanent-title">Не рекомендовать <span class="ex-count">${data?.permanent.length || 0}</span></h2></div><span class="ex-scope-badge">Постоянно</span></div><p class="ex-description">То, что вы не хотите смотреть вообще. Сохраним для следующих вечеров — ваши оценки останутся прежними.</p>
+  ${state.exclusionError?`<p class="ex-error" role="alert">${esc(state.exclusionError)}</p><button class="ex-text-button" data-ex-retry>Попробовать снова</button>`:''}${exclusionEditor('permanent')}
+  <details class="ex-help"><summary>Как это работает</summary><p>Действует для выбранного зрителя во всех автоматических подборах и на подключённых устройствах. Вдвоём объединяем ограничения обоих. Фильм всегда можно найти и выбрать в каталоге.</p><p>Если нужная характеристика неизвестна, фильм не предлагаем. «Без драм» исключает весь жанр: надёжных данных о тяжести сюжета нет.</p></details>
+  <details class="ex-legacy"><summary>Ранее отмечено «Не интересно» <span>${data?.disinterest?.length || 0}</span></summary><p class="ex-note">Это ваши прежние сигналы IQ. Отмена вернёт фильм в подбор и уберёт этот сигнал. Оценки просмотров сохранятся.</p>${(data?.disinterest || []).map(m=>`<div class="ex-legacy-film"><span>${exIcon('film')} ${esc(m.title)}</span><button class="ex-text-button" data-ex-disinterest="${esc(m.movie_id)}">Вернуть в подбор</button></div>`).join('') || '<p class="ex-note">Таких отметок пока нет.</p>'}</details></section>`;
+}
+
+async function refreshExclusions() {
+  const user=state.user,sid=state.session?.id;
+  if(!user || state.exclusionsPending)return;
+  let changed=false;
+  state.exclusionsPending=true;state.exclusionError='';
+  try {
+    const data=await api(`/api/exclusions/${user}${sid?`?session_id=${sid}`:''}`);
+    if(state.user!==user||state.session?.id!==sid)return;
+    const previous=state.exclusions;
+    state.exclusions=data;state.exclusionsFor=sid;state.exclusionsAt=Date.now();
+    changed=!previous || JSON.stringify(previous)!==JSON.stringify(data);
+    if(changed)invalidateExclusionResults();
+  }catch(e){state.exclusionError=e.message;}
+  finally {state.exclusionsPending=false;if(state.user===user && (changed || state.exclusionError))render();else if(state.user && state.user!==user)refreshExclusions();}
+}
+function invalidateExclusionResults() {
+  state.personal=null;state.personalAt=0;state.personalRevision++;
+  state.tonightRequest++;state.tinderRequest++;state.rouletteRequest++;
+  if(state.tonight){state.tonight.busy=false;state.tonight.data=null;state.tonight.detail=null;state.tonight.step=Math.min(3,state.tonight.step);saveTonight();}
+  if(state.tinder){state.tinder.queue=[];state.tinder.busy=false;state.tinder.loaded=false;state.tinder.detail=false;saveTinder();}
+  if(state.roulette){clearTimeout(state.roulette.timer);state.roulette.movie=null;state.roulette.busy=false;state.roulette.spinning=false;state.roulette.accepted=null;state.roulette.acceptedTitle=null;state.roulette.empty=false;saveRoulette();}
+}
+async function exclusionsChanged() {
+  invalidateExclusionResults();
+  await refreshExclusions();
+  if(state.view==='tonight'&&state.tonight?.filters.mood&&state.tonight?.filters.company)await fetchTonight(true);
+  else if(state.view==='tinder'&&state.tinder)await fetchTinder();
+  else if(state.view==='weekly'){state.weeklyPicks=(await api('/api/weekly-picks')).items;render();}
+}
+async function mutateExclusion(scope, rule, remove=false, clear=false) {
+  if(state.exclusionBusy)return;
+  if(clear&&scope==='permanent'&&!window.confirm('Очистить постоянные исключения? Оценки и отметки «Не интересно» останутся.'))return;
+  const user=state.user,sid=state.session?.id;state.exclusionBusy=true;
+  try {
+    let data;
+    if(remove||clear){
+      const query=new URLSearchParams({scope,session_id:String(sid),...(clear?{clear:'true',confirmed:'true'}:rule)});
+      data=await api(`/api/exclusions/${user}?${query}`,{method:'DELETE'});
+    } else data=await api(`/api/exclusions/${user}`,{method:'POST',body:JSON.stringify({...rule,scope,session_id:sid})});
+    if(state.user!==user)return;
+    state.exclusions=data;state.exclusionsFor=sid;state.exclusionsAt=Date.now();
+    await exclusionsChanged();
+    if(state.view==='results')state.session=await api(`/api/sessions/${sid}`);
+  }catch(e){toast(e.message);}
+  finally{state.exclusionBusy=false;render();}
+}
+function bindExclusions() {
+  root.querySelectorAll('[data-ex-edit-today]').forEach(el=>el.addEventListener('click',()=>{const panel=root.querySelector('.ex-today');if(panel){panel.open=true;panel.scrollIntoView({block:'start',behavior:'smooth'});panel.querySelector('summary').focus({preventScroll:true});}}));
+  const redrawComposer=()=>{render();root.querySelector('[data-ex-query]')?.focus({preventScroll:true});};
+  root.querySelectorAll('[data-ex-composer-open]').forEach(el=>el.addEventListener('click',()=>{exDraft(el.dataset.exComposerOpen).open=true;redrawComposer();}));
+  root.querySelectorAll('[data-ex-composer-close]').forEach(el=>el.addEventListener('click',()=>{exDraft(el.dataset.exComposerClose).open=false;render();}));
+  root.querySelectorAll('[data-ex-category]').forEach(el=>el.addEventListener('click',()=>{const draft=exDraft(el.dataset.exScope);draft.kind=el.dataset.exCategory==='other'?'director':el.dataset.exCategory;draft.value='';draft.results=null;redrawComposer();}));
+  const findMovies=async scope=>{
+    const draft=exDraft(scope),query=draft.value.trim(),user=state.user;
+    if(!query){draft.results=null;return;}
+    try{
+      const result=await api(`/api/movies/search?q=${encodeURIComponent(query)}`);
+      if(state.user!==user || draft!==exDraft(scope) || draft.value.trim()!==query || draft.kind!=='movie')return;
+      draft.results=result.items.slice(0,12);
+      const list=root.querySelector(`[data-ex-suggestions="${scope}"]`);if(list)list.innerHTML=exSuggestions(scope);
+    }catch(e){toast(e.message);}
+  };
+  root.querySelectorAll('[data-ex-query]').forEach(el=>el.addEventListener('input',()=>{
+    const scope=el.dataset.exQuery,draft=exDraft(scope);draft.value=el.value;
+    if(draft.kind==='movie'){
+      clearTimeout(bindExclusions.searchTimer);bindExclusions.searchTimer=setTimeout(()=>findMovies(scope),250);
+    }else{const list=root.querySelector(`[data-ex-suggestions="${scope}"]`);if(list)list.innerHTML=exSuggestions(scope);}
+  }));
+  root.querySelectorAll('[data-ex-search]').forEach(form=>form.addEventListener('submit',e=>{e.preventDefault();if(exDraft(form.dataset.exSearch).kind==='movie')findMovies(form.dataset.exSearch);}));
+  root.querySelectorAll('[data-ex-composer]').forEach(composer=>composer.addEventListener('click',e=>{
+    const el=e.target.closest('[data-ex-pick]');if(!el)return;
+    const scope=composer.dataset.exComposer,rule={kind:el.dataset.exKindValue,value:el.dataset.exPick};
+    const active=exclusionData()?.[scope].some(r=>r.kind===rule.kind&&r.value===rule.value);
+    mutateExclusion(scope,rule,active);
+  }));
+  root.querySelectorAll('[data-ex-time]').forEach(form=>form.addEventListener('submit',e=>{e.preventDefault();mutateExclusion(form.dataset.exTime,{kind:'max_runtime',value:form.querySelector('input').value});}));
+  root.querySelectorAll('[data-ex-remove]').forEach(el=>el.addEventListener('click',()=>{const scope=el.dataset.exScope,r=exclusionData()?.[scope][Number(el.dataset.exRemove)];if(r)mutateExclusion(scope,{kind:r.kind,value:r.value},true);}));
+  root.querySelectorAll('[data-ex-clear]').forEach(el=>el.addEventListener('click',()=>mutateExclusion(el.dataset.exClear,null,false,true)));
+  root.querySelectorAll('[data-ex-quick]').forEach(el=>el.addEventListener('click',()=>{const rule={kind:el.dataset.exQuick,value:el.dataset.exValue},active=exclusionData()?.temporary.some(r=>r.kind===rule.kind&&r.value===rule.value);mutateExclusion('temporary',rule,active);}));
+  root.querySelectorAll('[data-ex-retry]').forEach(el=>el.addEventListener('click',refreshExclusions));
+  root.querySelector('[data-ex-new]')?.addEventListener('click',async()=>{try{state.session=await api(`/api/sessions/${state.session.id}/restart`,{method:'POST'});await api(`/api/sessions/${state.session.id}/join`,{method:'POST',body:joinBody(state.user)});connectWs();await exclusionsChanged();}catch(e){toast(e.message);}});
+  root.querySelectorAll('[data-ex-disinterest]').forEach(el=>el.addEventListener('click',async()=>{try{await api(`/api/exclusions/${state.user}/disinterest/${encodeURIComponent(el.dataset.exDisinterest)}`,{method:'DELETE'});await exclusionsChanged();}catch(e){toast(e.message);}}));
+}
+
+// Isolated search state; all taste signals and saved actions use existing APIs.
+const genreOptions = ['хоррор','романтика','комедия','драма','боевик','sci-fi','фэнтези','детектив','триллер','мультфильм','мюзикл','документальное','приключения','криминал','семейный','история','музыка','военный','вестерн'];
+const themeOptions = {space:'Космос',time:'Путешествия во времени',robots:'Роботы',friendship:'Дружба',love:'Любовь',twists:'Неожиданные повороты',light:'Лёгкое настроение (по тегам)',tense:'Напряжение (по тегам)',funny:'Юмор (по тегам)'};
+const numericFields = {min_runtime:['Длительность от, мин',1,1440,1],max_runtime:['Длительность до, мин',1,1440,1],min_year:['Год от',1888,2100,1],max_year:['Год до',1888,2100,1],min_rating:['Рейтинг от, из 10',0,10,.1]};
+const examples = ['Детектив без ужасов до двух часов','Комедию после 2015 года с хорошим рейтингом','Похожее на Интерстеллар, но попроще','Фантастику про космос, которую я ещё не смотрел'];
+
+function createSmartSearch({state,root,api,render,esc,poster,tonightRating,tonightSynopsis,toast}) {
+  let owner = null, s, sequence = 0, controller = null;
+  function cancel() { sequence++; controller?.abort(); controller=null; if(s)s.pending=false; }
+  function current() {
+    if (owner !== state.user || !s) {
+      cancel(); owner=state.user;
+      s={query:'',refinement:'',data:null,editorDraft:null,pending:false,error:'',mode:'smart',saving:new Set()};
+    }
+    return s;
+  }
+  function entry() {
+    const local=current();
+    return `<section class="smart-entry" aria-labelledby="smart-entry-title"><div><p class="eyebrow">Умный поиск</p><h2 id="smart-entry-title">Опиши, что хочешь посмотреть</h2><p class="hint">Жанр, длительность или фильм для похожего — своими словами.</p></div>${queryForm(local,'home')}</section>`;
+  }
+  function queryForm(local,place='search') {
+    return `<form data-smart-query class="smart-query"><label class="sr-only" for="smart-query-${place}">Опиши, что хочешь посмотреть</label><textarea id="smart-query-${place}" name="query" rows="2" maxlength="500" placeholder="Например: детектив без ужасов до двух часов" aria-describedby="smart-query-help-${place}">${esc(local.query)}</textarea><div class="smart-query-actions"><small class="hint" id="smart-query-help-${place}">До 500 символов</small><button type="button" class="button ghost" data-smart-clear>Очистить</button><button class="button" type="submit">${local.pending?'Ищем…':'Подобрать фильмы'}</button></div></form>`;
+  }
+  function chips(c) {
+    const chip=(group,field,value,label,caption,display,icon='film')=>`<div class="smart-token ${field==='similar_title'||field==='themes'?'is-wide':''}"><button class="smart-token-edit" type="button" data-smart-edit-field="${field}" ${value==null?'':`data-smart-edit-value="${esc(value)}"`} aria-label="Изменить условие: ${esc(label)}">${exIcon(icon)}<span><small>${esc(caption)}</small><strong>${esc(display)}</strong></span></button><button class="smart-token-remove" type="button" data-smart-remove="${group}.${field}" ${value==null?'':`data-value="${esc(value)}"`} aria-label="Удалить условие: ${esc(label)}" title="Удалить условие">${exIcon('close')}</button></div>`;
+    const genreName=v=>({'sci-fi':'Фантастика','хоррор':'Ужасы','документальное':'Документальный'}[v] || v[0].toUpperCase()+v.slice(1));
+    const hard=[...c.hard.genres.map(v=>chip('hard','genres',v,`Жанр: ${v}`,'Жанр',genreName(v))),...c.hard.excluded_genres.map(v=>chip('hard','excluded_genres',v,`Без: ${v}`,'Исключить',genreName(v),'ban'))];
+    const numericLabels={min_runtime:['Длительность',`От ${c.hard.min_runtime} мин`,'clock'],max_runtime:['Длительность',`До ${c.hard.max_runtime} мин`,'clock'],min_year:['Год выпуска',`От ${c.hard.min_year}`,'film'],max_year:['Год выпуска',`До ${c.hard.max_year}`,'film'],min_rating:['Рейтинг',`От ${c.hard.min_rating} / 10`,'spark']};
+    for(const [k,[label]] of Object.entries(numericFields))if(c.hard[k]!=null)hard.push(chip('hard',k,null,`${label}: ${c.hard[k]}`,...numericLabels[k]));
+    if(c.hard.exclude_watched)hard.push(chip('hard','exclude_watched',null,'Ещё не смотрел(а)','Просмотренное','Не смотрел(а)','eye'));
+    const soft=c.soft.themes.map(v=>chip('soft','themes',v,`Тема: ${themeOptions[v]}`,'Пожелание',themeOptions[v],'spark'));
+    if(c.soft.similar_title)soft.push(chip('soft','similar_title',null,`Похоже на: ${s.data?.source?.title || c.soft.similar_title}`,'Похоже на',s.data?.source?.title || c.soft.similar_title));
+    return `<section class="smart-criteria" aria-labelledby="smart-criteria-title"><header class="smart-criteria-head"><div class="smart-criteria-heading"><span class="smart-criteria-symbol">${exIcon('check')}</span><div><h3 id="smart-criteria-title">Условия поиска <span class="smart-criteria-count">${hard.length+soft.length}</span></h3><p>Нажмите на условие, чтобы изменить</p></div></div><button type="button" class="smart-configure" data-smart-edit-toggle aria-expanded="${!!s.editorOpen}" aria-controls="smart-criteria-editor">${exIcon(s.editorOpen?'close':'plus')}<span>${s.editorOpen?'Закрыть':'Изменить'}</span></button></header>${hard.length?`<div class="smart-criteria-group"><p class="smart-group-label"><span></span>Обязательно${soft.length?'':' · все условия'}</p><div class="smart-tokens">${hard.join('')}</div></div>`:''}${soft.length?`<div class="smart-criteria-group is-soft"><p class="smart-group-label"><span></span>Желательно</p><div class="smart-tokens">${soft.join('')}</div></div>`:''}${!hard.length&&!soft.length?'<p class="smart-criteria-empty">Добавьте жанр, время или другое пожелание.</p>':''}${editor(c)}</section>`;
+  }
+  function editor(c) {
+    c=s.editorDraft?.criteria || c;
+    const replacing=s.editingToken?.field;
+    const options=field=>genreOptions.map(g=>`<option value="${esc(g)}" ${s.editorDraft?.selects[field]===g?'selected':''}>${esc({'sci-fi':'Фантастика','хоррор':'Ужасы'}[g]||g[0].toUpperCase()+g.slice(1))}</option>`).join('');
+    const number=(field,caption,unit)=>{const [label,min,max,step]=numericFields[field];return `<label class="smart-number"><span>${caption}</span><span class="smart-number-input"><input aria-label="${label}" name="${field}" type="number" min="${min}" max="${max}" step="${step}" inputmode="${step===1?'numeric':'decimal'}" value="${c.hard[field]??''}" placeholder="Любое"><span aria-hidden="true">${unit}</span></span></label>`;};
+    return `<div id="smart-criteria-editor" class="smart-editor-panel" ${s.editorOpen?'':'hidden'}><form data-smart-edit><div class="smart-range-grid"><fieldset><legend>${exIcon('clock')}Длительность</legend><div class="smart-range">${number('min_runtime','От','мин')}${number('max_runtime','До','мин')}</div></fieldset><fieldset><legend>${exIcon('film')}Год выпуска</legend><div class="smart-range">${number('min_year','От','')}${number('max_year','До','')}</div></fieldset><fieldset><legend>${exIcon('spark')}Рейтинг</legend>${number('min_rating','Не ниже','/ 10')}</fieldset></div><div class="smart-editor-selects"><label>${replacing==='genres'?'Жанр':'Добавить жанр'}<select name="genre"><option value="">Выберите жанр</option>${options('genre')}</select></label><label>${replacing==='excluded_genres'?'Исключённый жанр':'Исключить жанр'}<select name="excluded_genre"><option value="">Выберите жанр</option>${options('excluded_genre')}</select></label><label>${replacing==='themes'?'Пожелание':'Добавить пожелание'}<select name="theme"><option value="">Выберите тему</option>${Object.entries(themeOptions).map(([v,label])=>`<option value="${v}" ${s.editorDraft?.selects.theme===v?'selected':''}>${label}</option>`).join('')}</select></label></div><label class="smart-source-input">Найти похожее на<input name="similar_title" aria-label="Похожее на фильм" maxlength="200" value="${esc(c.soft.similar_title||'')}" placeholder="Название фильма"></label><label class="smart-check"><input type="checkbox" name="exclude_watched" ${c.hard.exclude_watched?'checked':''}><span>Только то, что я ещё не смотрел(а)<small>По истории и вашим отметкам просмотра</small></span></label><footer class="smart-editor-footer"><button class="smart-configure" type="button" data-smart-edit-close>Отмена</button><button class="button" type="submit">Применить условия</button></footer></form></div>`;
+  }
+  function content() {
+    const local=current(), data=local.data;
+    if(local.mode==='title')return '';
+    return `<section class="smart-search" aria-labelledby="smart-title"><div class="screen-head"><p class="eyebrow">Умный поиск</p><h2 id="smart-title">Опиши, что хочешь посмотреть</h2><p class="lede">Tonight учитывает понятные условия и ваш вкус. Нераспознанные пожелания покажем отдельно.</p></div>${queryForm(local)}<details class="smart-examples-disclosure" data-render-state ${data?'':'open'}><summary>Примеры запросов${exIcon('chevron')}</summary><div class="smart-examples" aria-label="Примеры запросов">${examples.map((q,i)=>`<button class="button ghost small" type="button" data-smart-example="${i}">${esc(q)}</button>`).join('')}</div></details><div data-smart-status role="status" aria-live="polite">${local.pending?'Разбираем запрос и ищем в локальном каталоге…':''}</div>${local.error?`<p class="smart-error" role="alert">${esc(local.error)}</p>`:''}${data?`<div class="smart-response" aria-busy="${local.pending}">${chips(data.criteria)}${data.notes.length?`<aside class="smart-notes"><h3>Что учли не полностью</h3><ul>${data.notes.map(note=>`<li>${esc(note)}</li>`).join('')}</ul></aside>`:''}${data.conflicts.length?`<div class="smart-error" role="alert">${data.conflicts.map(esc).join(' ')}</div>`:''}${data.needs_source?`<section class="smart-source"><h3>Какой фильм вы имеете в виду?</h3><div class="smart-chips">${data.sources.map(m=>`<button class="button secondary" data-smart-source="${esc(m.id)}">${esc(m.title)} · ${m.year}${m.original_title?` · ${esc(m.original_title)}`:''}</button>`).join('')}</div></section>`:''}${!data.needs_source&&!data.conflicts.length?results(data):''}<form data-smart-refine class="smart-refine"><label for="smart-refinement">Уточнить текущие условия</label><div class="search-form"><input id="smart-refinement" name="refinement" value="${esc(local.refinement)}" maxlength="500" placeholder="Например: только после 2020 года"><button class="button secondary" type="submit">Уточнить</button></div><p class="hint">Новые значения заменяют соответствующие условия. Остальные сохраняются.</p></form></div>`:''}</section>`;
+  }
+  function results(data) {
+    const policy=data.policies;
+    return `<section class="smart-results" aria-labelledby="smart-results-title"><h3 id="smart-results-title">${data.items.length?`Найдено: ${data.total}`:'Подходящих фильмов нет'}</h3>${policy?`<p class="hint">${data.cold_start?'Подобрано по вашему запросу.':'С учётом вашего вкуса Tonight IQ.'}${policy.permanent||policy.temporary||policy.evening?' Сохранённые ограничения также учтены.':''}</p>`:''}${data.items.length?`<div class="smart-film-grid">${data.items.map(m=>`<article class="smart-film"><div class="smart-poster">${poster(m)}</div><div class="smart-film-body"><p class="eyebrow">${tonightRating(m)}</p><h3>${esc(m.title)}</h3><p class="hint">${m.year||'Год не указан'} · ${m.runtime?`${m.runtime} мин`:'Длительность не указана'}</p><p class="hint">${esc((m.genres||[]).join(' · '))}</p><p>${esc(tonightSynopsis(m))}</p><details class="smart-reasons"><summary>Почему подходит</summary><ul>${m.search_reasons.map(reason=>`<li>${esc(reason)}</li>`).join('')}</ul><p class="hint">${esc(m.recommendation_reason)}</p></details><button class="button secondary" data-smart-save="${esc(m.id)}" ${m.saved||s.saving.has(m.id)?'disabled':''}>${m.saved?'✓ В списке «На потом»':s.saving.has(m.id)?'Сохраняем…':'♡ Сохранить на потом'}</button></div></article>`).join('')}</div>`:`<div class="empty"><p>Можно удалить отдельное условие кнопкой × или изменить значения выше. Ограничения автоматически не ослабляются.</p>${data.diagnostics.length?`<ul>${data.diagnostics.map(d=>`<li>${esc(d.label)}: исключает ${d.excluded} из ${data.catalog_count} фильмов каталога.</li>`).join('')}</ul>`:''}</div>`}</section>`;
+  }
+  function tabs() {
+    const local=current();
+    return `<div class="smart-tabs" role="group" aria-label="Способ поиска"><button class="button ${local.mode==='smart'?'':'secondary'}" data-search-mode="smart" aria-pressed="${local.mode==='smart'}">По описанию</button><button class="button ${local.mode==='title'?'':'secondary'}" data-search-mode="title" aria-pressed="${local.mode==='title'}">По названию</button></div>`;
+  }
+  async function run({criteria=null,refine=false,query=null}={}) {
+    const local=current(), user=owner;
+    cancel(); const revision=sequence;
+    controller=new AbortController();
+    local.pending=true; local.error='';
+    if(!criteria)local.data=null;
+    else if(local.data)local.data.criteria=criteria;
+    local.editorDraft=null;
+    local.editorOpen=false;local.editingToken=null;
+    state.view='search'; render();
+    try {
+      const data=await api(`/api/search/smart/${encodeURIComponent(user)}`,{method:'POST',signal:controller.signal,body:JSON.stringify({query:query??local.query,criteria,refine})});
+      if(revision!==sequence||state.user!==user)return;
+      if(refine&&local.data)data.notes=[...new Set([...local.data.notes,...data.notes])];
+      local.data=data;
+      if(refine)local.refinement='';
+    } catch(e) {
+      if(revision!==sequence||e.name==='AbortError')return;
+      local.error=e.message;
+    } finally {
+      if(revision===sequence){local.pending=false;controller=null;if(state.view==='search')render();}
+    }
+  }
+  function cloneCriteria() { return JSON.parse(JSON.stringify(s.data.criteria)); }
+  function bind() {
+    const local=current();
+    function openEditor(field,value) {
+      const names={genres:'genre',excluded_genres:'excluded_genre',themes:'theme'};
+      local.editingToken=value?{field,value}:null;
+      if(value)local.editorDraft={criteria:cloneCriteria(),selects:{[names[field]]:value}};
+      local.editorOpen=true;render();
+      const target=field?root.querySelector(`[data-smart-edit] [name="${names[field]||field}"]`):null;
+      target?.focus();
+    }
+    root.querySelector('[data-smart-edit-toggle]')?.addEventListener('click',()=>{if(local.editorOpen){local.editorOpen=false;local.editingToken=null;local.editorDraft=null;render();}else openEditor();});
+    root.querySelector('[data-smart-edit-close]')?.addEventListener('click',()=>{local.editorOpen=false;local.editingToken=null;local.editorDraft=null;render();root.querySelector('[data-smart-edit-toggle]')?.focus();});
+    root.querySelectorAll('[data-smart-edit-field]').forEach(el=>el.addEventListener('click',()=>openEditor(el.dataset.smartEditField,el.dataset.smartEditValue)));
+    root.querySelector('[data-smart-edit]')?.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();local.editorOpen=false;local.editingToken=null;local.editorDraft=null;render();root.querySelector('[data-smart-edit-toggle]')?.focus();}});
+    root.querySelectorAll('[data-search-mode]').forEach(el=>el.addEventListener('click',()=>{cancel();local.mode=el.dataset.searchMode;render();}));
+    root.querySelector('[data-smart-query] textarea')?.addEventListener('input',e=>{
+      local.query=e.target.value;
+      if(local.pending){cancel();root.querySelector('[data-smart-status]').textContent='Запрос изменён. Нажмите «Подобрать фильмы».';root.querySelector('[data-smart-query] button[type="submit"]').textContent='Подобрать фильмы';}
+    });
+    root.querySelector('[data-smart-query]')?.addEventListener('submit',e=>{e.preventDefault();local.query=new FormData(e.currentTarget).get('query').trim();local.mode='smart';run();});
+    root.querySelector('[data-smart-clear]')?.addEventListener('click',()=>{cancel();local.query='';local.refinement='';local.data=null;local.editorDraft=null;local.error='';render();root.querySelector('[data-smart-query] textarea')?.focus();});
+    root.querySelectorAll('[data-smart-example]').forEach(el=>el.addEventListener('click',()=>{local.query=examples[Number(el.dataset.smartExample)];run();}));
+    root.querySelectorAll('[data-smart-remove]').forEach(el=>el.addEventListener('click',()=>{
+      const c=cloneCriteria(), [group,field]=el.dataset.smartRemove.split('.');
+      if(Array.isArray(c[group][field]))c[group][field]=c[group][field].filter(v=>v!==el.dataset.value);
+      else c[group][field]=field==='exclude_watched'?false:null;
+      if(field==='similar_title')c.soft.source_id=null;
+      run({criteria:c});
+    }));
+    root.querySelectorAll('[data-smart-source]').forEach(el=>el.addEventListener('click',()=>{const c=cloneCriteria();c.soft.source_id=el.dataset.smartSource;run({criteria:c});}));
+    const editForm=root.querySelector('[data-smart-edit]');
+    function editedCriteria() {
+      const form=new FormData(editForm),c=cloneCriteria();
+      for(const k of Object.keys(numericFields))c.hard[k]=form.get(k)===''?null:Number(form.get(k));
+      for(const [input,group,field] of [['genre','hard','genres'],['excluded_genre','hard','excluded_genres'],['theme','soft','themes']]){
+        if(local.editingToken?.field===field)c[group][field]=c[group][field].filter(v=>v!==local.editingToken.value);
+        const value=form.get(input);if(value&&!c[group][field].includes(value))c[group][field].push(value);
+      }
+      c.hard.exclude_watched=form.has('exclude_watched');
+      const title=form.get('similar_title').trim()||null;
+      if(title!==c.soft.similar_title)c.soft.source_id=null;
+      c.soft.similar_title=title;return c;
+    }
+    function preserveEdit(){const form=new FormData(editForm);local.editorDraft={criteria:editedCriteria(),selects:{genre:form.get('genre'),excluded_genre:form.get('excluded_genre'),theme:form.get('theme')}};}
+    editForm?.addEventListener('input',preserveEdit);
+    editForm?.addEventListener('change',preserveEdit);
+    editForm?.addEventListener('submit',e=>{e.preventDefault();run({criteria:editedCriteria()});});
+    root.querySelector('[data-smart-refine] input')?.addEventListener('input',e=>{local.refinement=e.target.value;});
+    root.querySelector('[data-smart-refine]')?.addEventListener('submit',e=>{e.preventDefault();const query=new FormData(e.currentTarget).get('refinement').trim();if(query)run({criteria:cloneCriteria(),refine:true,query});});
+    root.querySelectorAll('[data-smart-save]').forEach(el=>el.addEventListener('click',async()=>{
+      const user=owner,id=el.dataset.smartSave;local.saving.add(id);render();
+      try{await api(`/api/tonight/${encodeURIComponent(user)}/movies/${encodeURIComponent(id)}`,{method:'POST',body:JSON.stringify({action:'watchlist'})});const movie=local.data?.items.find(m=>m.id===id);if(movie)movie.saved=true;toast('Добавлено в общий список «На потом»');}
+      catch(e){if(state.user===user)local.error=e.message;}
+      finally{local.saving.delete(id);if(state.user===user&&state.view==='search')render();}
+    }));
+  }
+  return {entry,content,tabs,bind,cancel,isTitle:()=>current().mode==='title'};
+}
+
+
+const movieMatch=typeof createMovieMatch==='function'?createMovieMatch({state,root,render,shell,esc,poster,toast}):{entry:()=>'',bind:()=>{},content:()=>'',resume:async()=>false};
+const smartSearch=createSmartSearch({state,root,api,render,esc,poster,tonightRating,tonightSynopsis,toast});
 init();

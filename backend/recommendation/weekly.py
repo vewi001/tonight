@@ -7,6 +7,7 @@ from typing import Any
 from backend.database.db import db_session
 from backend.movies.catalog import _franchise_is_available, is_released, row_to_movie
 from backend.recommendation.engine import _pair_profile
+from backend.recommendation.exclusions import filter_for_users
 
 
 def _week_start(reference_day: date) -> date:
@@ -45,7 +46,7 @@ def weekly_picks(reference_day: date | None = None, limit: int = 5) -> list[dict
     week_key = week.isoformat()
     with db_session() as db:
         stored = _stored_picks(db, week_key)
-        existing = [movie for movie in stored if is_released(movie, week)]
+        existing = filter_for_users(db, [movie for movie in stored if is_released(movie, week)])
         if len(existing) == limit:
             return existing
         if stored:
@@ -62,6 +63,7 @@ def weekly_picks(reference_day: date | None = None, limit: int = 5) -> list[dict
             and (movie.get("rating") or 0) > 0
             and _franchise_is_available(movie, watched, catalog)
         ]
+        candidates = filter_for_users(db, candidates)
         pair_profile = _pair_profile(db)
         ranked = sorted(candidates, key=lambda movie: (-_score(movie, pair_profile, week)[0], _score(movie, pair_profile, week)[1]))
 

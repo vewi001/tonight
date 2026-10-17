@@ -18,6 +18,7 @@ PERSONAL_TABLES = (
     "watchlist",
     "weekly_picks",
     "avoid_similar",
+    "recommendation_exclusions",
     "taste_genre_exclusions",
     "taste_profile_resets",
 )

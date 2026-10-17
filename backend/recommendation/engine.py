@@ -9,6 +9,7 @@ from backend.movies.catalog import _franchise_is_available, is_released, row_to_
 from backend.movies.genres import normalize_genres
 from backend.recommendation.avoidance import load_avoidance_rules, similarity_penalty
 from backend.recommendation.taste_profile import taste_signals
+from backend.recommendation.exclusions import load_policy, filter_movies
 
 REACTION_SCORE = {"love": 0.98, "like": 0.80, "okay": 0.60, "dislike": 0.04, "unseen": 0.52}
 MOOD_GENRES = {
@@ -164,6 +165,7 @@ def recommend(session_id: int, limit: int = 7) -> list[dict[str, Any]]:
         people = {user: _participant_context(db, session_id, user) for user in ("lera", "nikita")}
         taste = {user: _taste_profile(db, session_id, user) for user in ("lera", "nikita")}
         pair = _pair_profile(db)
+        permanent, temporary, policy_watched = load_policy(db, ('lera', 'nikita'), session_id)
         session = db.execute("SELECT rejected_movies FROM sessions WHERE id=?", (session_id,)).fetchone()
         rejected = set(loads(session["rejected_movies"], [])) if session else set()
         watched = {row[0] for row in db.execute("SELECT movie_id FROM watch_history").fetchall()}
@@ -174,16 +176,13 @@ def recommend(session_id: int, limit: int = 7) -> list[dict[str, Any]]:
 
     disliked = set(people["lera"]["disliked"]) | set(people["nikita"]["disliked"])
     catalog = [row_to_movie(row) for row in rows]
+    eligible_catalog = filter_movies(catalog, permanent, temporary, policy_watched)
     runtimes = [p["max_runtime"] for p in people.values() if p["max_runtime"]]
     years = [p["min_year"] for p in people.values() if p["min_year"]]
     max_runtime = min(runtimes) if runtimes else None
     min_year = max(years) if years else None
-    # Genre exclusions are promises, not preferences: never relax them.  A small
-    # local catalog can however make a year/runtime intersection empty, so widen
-    # those two non-genre constraints progressively rather than strand the pair
-    # on an error screen.
     base_candidates: list[dict[str, Any]] = []
-    for movie in catalog:
+    for movie in eligible_catalog:
         if movie["id"] in rejected or movie["id"] in watched:
             continue
         if not is_released(movie):
@@ -198,24 +197,9 @@ def recommend(session_id: int, limit: int = 7) -> list[dict[str, Any]]:
 
     effective_max_runtime, effective_min_year = max_runtime, min_year
     relaxed_constraints: list[str] = []
-    candidates = base_candidates
-    while base_candidates:
-        candidates = [
-            movie for movie in base_candidates
-            if (not effective_max_runtime or not movie["runtime"] or movie["runtime"] <= effective_max_runtime)
-            and (not effective_min_year or movie["year"] >= effective_min_year)
-        ]
-        if candidates:
-            break
-        if effective_max_runtime is not None:
-            effective_max_runtime = None
-            relaxed_constraints.append("длительность")
-            continue
-        if effective_min_year is not None:
-            effective_min_year = None
-            relaxed_constraints.append("эпоха")
-            continue
-        break
+    candidates = [movie for movie in base_candidates
+                  if (not max_runtime or movie.get('runtime') and movie['runtime'] <= max_runtime)
+                  and (not min_year or movie.get('year') and movie['year'] >= min_year)]
 
     output: list[dict[str, Any]] = []
     for movie in candidates:

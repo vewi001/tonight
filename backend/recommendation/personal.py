@@ -18,6 +18,7 @@ from backend.movies.genres import normalize_genres
 from backend.recommendation.avoidance import load_avoidance_rules, similarity_penalty
 from backend.recommendation.engine import MOOD_GENRES
 from backend.recommendation.taste_profile import taste_signals
+from backend.recommendation.exclusions import load_policy, filter_movies, active_evening
 
 WEIGHTS = {'genres': .32, 'keywords': .24, 'director': .14, 'cast_names': .10, 'era': .08}
 
@@ -139,7 +140,8 @@ def personal_recommendations(user_id: str, limit: int = 6, reference_day: date |
             excluded.update(loads(row['rejected_movies'], []))
             if row['status'] in {'selected', 'watching'}:
                 excluded.add(row['selected_movie_id'])
-        prefs = db.execute('SELECT * FROM participants WHERE user_id=? ORDER BY session_id DESC LIMIT 1', (user_id,)).fetchone()
+        evening = active_evening(db)
+        prefs = db.execute('SELECT * FROM participants WHERE user_id=? AND session_id=?', (user_id, evening['id'])).fetchone() if evening else None
         blocked = set(loads(prefs['disliked_genres'], [])) if prefs else set()
         desired = set().union(*(MOOD_GENRES.get(mood, set()) for mood in loads(prefs['moods'], []))) if prefs else set()
         # Today's batch is stable; previous days rotate deterministically.
@@ -163,20 +165,24 @@ def personal_recommendations(user_id: str, limit: int = 6, reference_day: date |
                 franchise_catalog[movie['franchise_key']].append(movie)
         eligible = [m for m in catalog if is_released(m, day) and
                     _franchise_is_available(m, watched, franchise_catalog.get(m.get('franchise_key'), []))]
+        policy_users = watched_users
+        permanent, temporary, policy_watched = load_policy(db, policy_users)
+        before_policies = len(eligible)
+        eligible = filter_movies(eligible, permanent, temporary, policy_watched)
+        exclusion_diagnostics = {'permanent': len(permanent), 'temporary': len(temporary),
+                                 'removed': before_policies - len(eligible)}
         diagnostics = []
-        catalog_available = len(eligible)
+        catalog_available = before_policies
         if tonight is not None:
             excluded.update(tonight['seen_ids'])
             blocked = (blocked if roulette is not None else set()) | set(tonight['excluded_genres'])
             desired = desired if roulette is not None else MOOD_GENRES.get(tonight['mood'], set())
             checks = [
                 ('mood', 'настроение', lambda m: roulette is not None or not desired or bool(set(m['genres']) & desired)),
-                ('max_runtime', 'продолжительность (фильмы без длительности тоже исключены)', lambda m: not tonight['max_runtime'] or bool(m.get('runtime') and m['runtime'] <= tonight['max_runtime'])),
-                ('min_rating', 'минимальный рейтинг (без оценки фильмы исключены)', lambda m: not tonight['min_rating'] or bool(m.get('rating') is not None and m['rating'] >= tonight['min_rating'])),
-                ('year', 'диапазон лет', lambda m: bool(m.get('year')) and (not tonight['min_year'] or m['year'] >= tonight['min_year']) and (not tonight['max_year'] or m['year'] <= tonight['max_year'])),
-                ('excluded_genres', 'исключённые жанры', lambda m: not set(m['genres']) & blocked),
                 ('company', 'семейный жанр', lambda m: tonight['company'] != 'family' or bool(set(m['genres']) & {'семейный','мультфильм'}) and not set(m['genres']) & {'хоррор','триллер'}),
             ]
+            from backend.recommendation.constraints import condition_checks
+            checks += condition_checks(tonight, blocked)
             base = [m for m in eligible if m['id'] not in excluded]
             eligible = [m for m in base if all(check(m) for _, _, check in checks)]
             if len(eligible) < limit:
@@ -217,5 +223,5 @@ def personal_recommendations(user_id: str, limit: int = 6, reference_day: date |
         db.executemany('INSERT OR IGNORE INTO personal_impressions(user_id,movie_id,day) VALUES(?,?,?)',
                        [(user_id, m['id'], day.isoformat()) for m in items])
     return {'items': items, 'candidate_count': candidate_count, 'watchlist_count': watchlist_count, 'cold_start': not any(s['value'] for s in signals) and (tonight is not None or not desired),
-            'limited': len(items) < limit, 'relaxations': diagnostics, 'catalog_available': catalog_available,
+            'exclusions': exclusion_diagnostics, 'limited': len(items) < limit, 'relaxations': diagnostics, 'catalog_available': catalog_available,
             'exhausted': bool(tonight and tonight['seen_ids'] and len(items) < limit)}

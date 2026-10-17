@@ -72,14 +72,12 @@ def test_runtime_uses_stricter_limit():
     assert all(movie["runtime"] <= 90 for movie in results)
 
 
-def test_empty_year_and_runtime_intersection_relaxes_only_those_constraints():
+def test_empty_year_and_runtime_intersection_keeps_hard_constraints():
     sid = make_session(disliked_lera=["sci-fi"])
     with db_session() as db:
         db.execute("UPDATE participants SET max_runtime=40,min_year=2025 WHERE session_id=?", (sid,))
     results = recommend(sid, 40)
-    assert results
-    assert all("sci-fi" not in movie["genres"] for movie in results)
-    assert results[0]["relaxed_constraints"] == ["длительность", "эпоха"]
+    assert results == []  # Explicit constraints may only be relaxed by the viewer.
 
 
 def test_sequel_is_hidden_until_every_previous_part_is_watched():
