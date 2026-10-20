@@ -73,6 +73,7 @@ class SmartSearchIn(StrictModel):
     query: str = Field(default='', max_length=500)
     criteria: SearchCriteria | None = None
     refine: bool = False
+    offset: int = Field(0, ge=0, le=100000)
 
 
 def normalized(text: str) -> str:

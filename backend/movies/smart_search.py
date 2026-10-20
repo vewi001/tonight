@@ -200,7 +200,7 @@ def search(user_id: str, payload: SmartSearchIn, limit: int = 12) -> dict:
         saved_ids = {r[0] for r in db.execute('SELECT movie_id FROM watchlist')}
         response['items'] = [{**row_to_movie(by_id[m['id']]),
                               **{k: m[k] for k in ('search_reasons', 'recommendation_reason', 'personalized')},
-                              'saved': m['id'] in saved_ids, 'rating_source': 'TMDB' if m.get('tmdb_id') else None} for m in matches[:limit]]
+                              'saved': m['id'] in saved_ids, 'rating_source': 'TMDB' if m.get('tmdb_id') else None} for m in matches[payload.offset:payload.offset + limit]]
         if not matches:
             # One linear pass per active condition; report counts before policies,
             # not a promise to restore a movie blocked by another hard restriction.

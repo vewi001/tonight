@@ -17,6 +17,7 @@ from backend.movies.catalog import _franchise_is_available, is_released, row_to_
 from backend.movies.genres import normalize_genres
 from backend.recommendation.avoidance import load_avoidance_rules, similarity_penalty
 from backend.recommendation.engine import MOOD_GENRES
+from backend.recommendation.mood import mood_evidence
 from backend.recommendation.taste_profile import taste_signals
 from backend.recommendation.exclusions import load_policy, filter_movies, active_evening
 
@@ -35,7 +36,8 @@ def features(movie: dict) -> dict[str, set[str]]:
 def rank_movies(catalog: list[dict], signals: list[dict], *, excluded: set[str] | None = None,
                 blocked_genres: set[str] | None = None, desired: set[str] | None = None,
                 rules: list[dict] | None = None, exposure: dict[str, int] | None = None,
-                min_year: int | None = None, max_runtime: int | None = None, limit: int = 6, diversify: bool = True) -> list[dict]:
+                min_year: int | None = None, max_runtime: int | None = None, limit: int = 6, diversify: bool = True,
+                mood: str | None = None) -> list[dict]:
     """Pure weighted ranking followed by a bounded greedy diversity pass."""
     points = {key: defaultdict(list) for key in WEIGHTS}
     for signal in signals:
@@ -72,16 +74,14 @@ def rank_movies(catalog: list[dict], signals: list[dict], *, excluded: set[str] 
                 elif kind == 'era':
                     display = f'{term}-е'
                 facts.append((contributions[kind], f"{labels[kind]}: {display}."))
-        mood = bool(terms['genres'] & (desired or set()))
-        personal = sum(contributions.values()) + (.12 if mood else 0)
-        if mood:
-            facts.append((.12, 'Жанр подходит под выбранное вами настроение.'))
+        _, mood_weight, mood_reason = mood_evidence(movie, mood, desired or set())
+        personal = sum(contributions.values())
         rating = max(0., min(10., movie.get('rating') or 0))
         votes = max(0, movie.get('vote_count') or 0)
         quality = (rating / 10) * votes / (votes + 100)
         popularity = min(1., log1p(votes) / log1p(100000))
         penalty = similarity_penalty(movie, rules or [])
-        score = personal + .09 * quality + .03 * popularity - penalty - min(.30, .10 * (exposure or {}).get(movie['id'], 0))
+        score = personal + mood_weight + .09 * quality + .03 * popularity - penalty - min(.30, .10 * (exposure or {}).get(movie['id'], 0))
         personalized = personal > 0 and bool(facts) and personal > penalty
         if personalized:
             reason = max(facts)[1]
@@ -89,6 +89,8 @@ def rank_movies(catalog: list[dict], signals: list[dict], *, excluded: set[str] 
             reason = f'Стартовый вариант: зрительский рейтинг {rating:.1f} из 10; личного совпадения пока нет.'
         else:
             reason = 'Вариант для знакомства: пока недостаточно данных для личного совпадения.'
+        if mood_reason:
+            reason = f'{reason} {mood_reason}' if personalized else mood_reason
         ranked.append({**movie, 'recommendation_score': round(score, 6), 'personalized': personalized,
                        'recommendation_reason': reason, 'ranking_factors': contributions})
     if not diversify:
@@ -178,7 +180,7 @@ def personal_recommendations(user_id: str, limit: int = 6, reference_day: date |
             blocked = (blocked if roulette is not None else set()) | set(tonight['excluded_genres'])
             desired = desired if roulette is not None else MOOD_GENRES.get(tonight['mood'], set())
             checks = [
-                ('mood', 'настроение', lambda m: roulette is not None or not desired or bool(set(m['genres']) & desired)),
+                ('mood', 'настроение', lambda m: roulette is not None or mood_evidence(m, tonight['mood'], desired)[0]),
                 ('company', 'семейный жанр', lambda m: tonight['company'] != 'family' or bool(set(m['genres']) & {'семейный','мультфильм'}) and not set(m['genres']) & {'хоррор','триллер'}),
             ]
             from backend.recommendation.constraints import condition_checks
@@ -205,7 +207,8 @@ def personal_recommendations(user_id: str, limit: int = 6, reference_day: date |
                 eligible = [m for m in eligible if m['id'] in saved_ids]
         items = rank_movies(eligible, signals, excluded=excluded, blocked_genres=blocked, desired=desired,
                             rules=rules, exposure=exposure, min_year=prefs['min_year'] if prefs and tonight is None else None,
-                            max_runtime=prefs['max_runtime'] if prefs and tonight is None else None, limit=len(eligible) if roulette is not None else limit, diversify=roulette is None)
+                            max_runtime=prefs['max_runtime'] if prefs and tonight is None else None, limit=len(eligible) if roulette is not None else limit, diversify=roulette is None,
+                            mood=tonight['mood'] if tonight and roulette is None else None)
         candidate_count = len(items)
         if roulette is not None and items:
             from backend.recommendation.roulette import weighted_pick

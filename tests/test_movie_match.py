@@ -123,6 +123,77 @@ def test_simultaneous_votes_and_conflicting_tabs_are_atomic():
     assert all(r['version'] >= snapshot['version'] for r in results)
 
 
+def test_independent_readiness_from_one_snapshot_merges_and_retries():
+    a, room = create()
+    b = browser(B)
+    assert b.post('/api/movie-match/join', json={'room': room['room']}).status_code == 200
+    sid = room['id']
+    before = get(a, sid)
+    payload = {'op': 'ready', 'version': before['version']}
+    path = f'/api/sessions/{sid}/match'
+    assert a.post(path, json=payload).status_code == 200
+    assert get(b, sid)['filters'] == before['filters']
+    assert b.post(path, json=payload).json()['phase'] == 'voting'
+    for client in (a, b):
+        assert client.post(path, json=payload).status_code == 200
+    assert all(p['ready'] for p in get(a, sid)['people'])
+
+
+def test_parallel_readiness_is_atomic_including_duplicate_tabs():
+    a, room = create()
+    browser(B).post('/api/movie-match/join', json={'room': room['room']})
+    action = mm.Action(op='ready', version=get(a, room['id'])['version'])
+    with ThreadPoolExecutor(4) as pool:
+        results = list(pool.map(lambda token: mm.act(room['id'], token, action), [A, B, A, B]))
+    assert get(a, room['id'])['phase'] == 'voting'
+    assert all(r['phase'] in {'lobby', 'voting'} for r in results)
+
+
+def test_final_consent_merges_with_votes_and_same_proposal_confirmation():
+    a, b, sid = pair()
+    mid = match(a, b, sid)
+    proposed = act(a, sid, 'propose', movie_id=mid).json()
+    other = proposed['card']['id']
+    confirmation = mm.Action(op='confirm', version=proposed['version'], movie_id=mid)
+    vote = mm.Action(op='vote', version=proposed['version'], movie_id=other, vote='yes')
+    with ThreadPoolExecutor(4) as pool:
+        # A's consent was explicit at proposal time; both tabs may confirm it.
+        jobs = [pool.submit(mm.act, sid, A, vote), pool.submit(mm.act, sid, A, confirmation),
+                pool.submit(mm.act, sid, B, confirmation), pool.submit(mm.act, sid, B, confirmation)]
+        # A vote can arrive after the final decision; it merges without
+        # reopening it or requiring the user to resend an independent answer.
+        for job in jobs:
+            job.result()
+    final = get(b, sid)
+    assert final['phase'] == 'finished' and final['final']['id'] == mid
+    assert final['confirmed'] == [0, 1]
+
+
+def test_same_movie_reproposal_does_not_accept_old_consent_and_future_versions():
+    a, b, sid = pair()
+    mid = match(a, b, sid)
+    old = act(a, sid, 'propose', movie_id=mid).json()
+    act(a, sid, 'cancel')
+    current = act(a, sid, 'propose', movie_id=mid).json()
+    path = f'/api/sessions/{sid}/match'
+    assert b.post(path, json={'op':'confirm', 'version':old['version'], 'movie_id':mid}).status_code == 409
+    assert b.post(path, json={'op':'confirm', 'version':current['version']+100, 'movie_id':mid}).status_code == 409
+    assert get(b, sid)['phase'] == 'voting'
+
+
+def test_changing_conditions_back_still_invalidates_earlier_readiness():
+    a, room = create()
+    b = browser(B)
+    b.post('/api/movie-match/join', json={'room':room['room']})
+    sid = room['id']
+    old = get(a, sid)
+    act(a, sid, 'ready')
+    act(b, sid, 'filters', filters={**old['filters'], 'max_runtime':90})
+    restored = act(b, sid, 'filters', filters=old['filters']).json()
+    assert not any(p['ready'] for p in restored['people'])
+    assert a.post(f'/api/sessions/{sid}/match', json={'op':'ready','version':old['version']}).status_code == 409
+
+
 @pytest.mark.parametrize('vote',['no','watched'])
 def test_negative_or_watched_vote_never_creates_a_match_or_reveals_private_vote(vote):
     a,b,sid=pair()

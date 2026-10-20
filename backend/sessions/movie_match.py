@@ -103,7 +103,7 @@ def initialize_room(sid, token, profile=None, *, db=None):
     # Old room credentials/votes are removed after seven days; history rows
     # and normal Tonight sessions remain intact.
     db.execute("UPDATE sessions SET match_data='{}' WHERE match_data!='{}' AND json_extract(match_data,'$.expires_at') < ?", ((now()-timedelta(days=6)).isoformat(),))
-    data = {'room': secrets.token_urlsafe(24), 'version': 1, 'phase': 'lobby',
+    data = {'room': secrets.token_urlsafe(24), 'version': 1, 'conditions_version': 1, 'phase': 'lobby',
             'expires_at': (now()+timedelta(hours=24)).isoformat(), 'filters': Filters().model_dump(),
             'members': [{'key': key, 'votes': {}, 'ready': False, 'saved': []}],
             'deck': [], 'proposal': None, 'confirmed': [], 'final': None,
@@ -132,6 +132,7 @@ def join(room, token):
             # A newcomer must see and agree with the same conditions.
             for p in data['members']:
                 p['ready'] = False
+            data['conditions_version'] = data['version'] + 1
             write(db, row['id'], data)
         sid = row['id']
     return snapshot(sid, token)
@@ -189,6 +190,12 @@ def act(sid, token, action):
         available(data)
         person = data['members'][me]
         op, mid = action.op, action.movie_id
+        # Old saved rooms have no watermarks. Require their current snapshot
+        # once; persist the watermark before independent actions advance it.
+        data.setdefault('conditions_version', data['version'])
+        data.setdefault('proposal_version', data['version'])
+        if action.version > data['version']:
+            raise MatchError('Комната обновилась. Проверьте актуальные условия и повторите действие.')
         # An immutable vote per (session, browser, movie) makes retries and
         # multiple tabs safe without trusting a client-provided user id.
         duplicate = op == 'vote' and mid in person['votes']
@@ -196,26 +203,38 @@ def act(sid, token, action):
             if person['votes'][mid] != action.vote:
                 raise MatchError('Этот фильм уже оценён в другой вкладке. Обновите карточку.')
         elif op == 'vote':
-            if data['phase'] != 'voting' or mid not in data['deck'] or action.vote is None or action.version < data.get('ballot_version', 1):
+            # An in-flight answer from this ballot can finish after the final
+            # confirmation. Immutable votes cannot undo the two existing yes
+            # votes on the final movie, and never reopen the decision.
+            if data['phase'] not in {'voting', 'finished'} or mid not in data['deck'] or action.vote is None or action.version < data.get('ballot_version', 1):
                 raise MatchError('Карточка устарела. Обновите выбор.')
             if mid not in {m['id'] for m in candidates(db, sid, data)}:
                 raise MatchError('Фильм больше не проходит условия комнаты.')
             person['votes'][mid] = action.vote
             write(db, sid, data)
         else:
-            # Shared changes require the exact revision; votes may advance the
-            # revision independently and never overwrite one another.
-            if action.version != data['version']:
+            # Consent belongs to the conditions/proposal the browser saw,
+            # not to unrelated votes or the other person's consent. SQLite's
+            # write lock serializes the merge; no stale state is overwritten.
+            floor = (data['conditions_version'] if op == 'ready' else
+                     data['proposal_version'] if op == 'confirm' else data['version'])
+            if action.version < floor:
                 raise MatchError('Комната обновилась. Проверьте актуальные условия и повторите действие.')
             if op == 'filters':
                 if action.filters is None or data['phase'] not in {'lobby', 'voting'}:
                     raise MatchError('Сейчас нельзя менять условия.')
-                data['filters'] = action.filters.model_dump()
+                filters = action.filters.model_dump()
+                if filters == data['filters']:
+                    return snapshot(sid, token)
+                data['filters'] = filters
+                data['conditions_version'] = data['version'] + 1
                 data['phase'] = 'lobby'
                 data['proposal'], data['confirmed'] = None, []
                 for p in data['members']:
                     p['ready'] = False
             elif op == 'ready':
+                if person['ready'] and data['phase'] in {'lobby', 'voting', 'finished'}:
+                    return snapshot(sid, token)
                 if data['phase'] != 'lobby' or len(data['members']) != 2:
                     raise MatchError('Дождитесь второго участника.')
                 person['ready'] = True
@@ -230,7 +249,10 @@ def act(sid, token, action):
                 if data['phase'] != 'voting' or mid not in mutual(data) or mid not in {m['id'] for m in candidates(db, sid, data)}:
                     raise MatchError('Выберите фильм из взаимных совпадений.')
                 data['proposal'], data['confirmed'] = mid, [me]
+                data['proposal_version'] = data['version'] + 1
             elif op == 'confirm':
+                if data['phase'] == 'finished' and mid == data['final'] and me in data['confirmed']:
+                    return snapshot(sid, token)
                 if data['phase'] != 'voting' or mid != data['proposal'] or mid not in mutual(data) or mid not in {m['id'] for m in candidates(db, sid, data)}:
                     raise MatchError('Предложение изменилось. Проверьте фильм.')
                 data['confirmed'] = sorted(set(data['confirmed'] + [me]))

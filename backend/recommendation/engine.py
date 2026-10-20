@@ -10,6 +10,7 @@ from backend.movies.genres import normalize_genres
 from backend.recommendation.avoidance import load_avoidance_rules, similarity_penalty
 from backend.recommendation.taste_profile import taste_signals
 from backend.recommendation.exclusions import load_policy, filter_movies
+from backend.recommendation.mood import mood_evidence
 
 REACTION_SCORE = {"love": 0.98, "like": 0.80, "okay": 0.60, "dislike": 0.04, "unseen": 0.52}
 MOOD_GENRES = {
@@ -95,7 +96,7 @@ def _person_score(movie: dict[str, Any], prefs: dict[str, Any], genres: dict[str
         base = 0.32 * catalog + 0.48 * learned + 0.20 * detail
 
     desired = set().union(*(MOOD_GENRES.get(mood, set()) for mood in prefs["moods"]))
-    if desired and desired.intersection(movie["genres"]):
+    if any(mood_evidence(movie, mood, MOOD_GENRES.get(mood, set()))[1] for mood in prefs['moods']):
         base += SCORING["vibe_match"]
     energy = prefs.get("energy")
     if energy == "low" and ((movie["runtime"] or 0) > 130 or "драма" in movie["genres"] and movie["rating"] < 7.4):
@@ -109,7 +110,7 @@ def _explanation(name: str, score: float, movie: dict[str, Any], prefs: dict[str
     desired = set().union(*(MOOD_GENRES.get(mood, set()) for mood in prefs["moods"]))
     matches = [genre for genre in movie["genres"] if genre in desired]
     if matches:
-        return f"Попадает в сегодняшний вайб: {', '.join(matches[:2])}. И по вкусу {name} выглядит уверенно."
+        return f"Жанровое приближение к настроению: {', '.join(matches[:2])}. Эмоциональный тон не подтверждён."
     if score >= 0.76:
         return f"Хорошо совпадает с реакциями {name} и не спорит с сегодняшними ограничениями."
     return f"Мягкий компромисс: знакомый жанровый рисунок без явных стоп-сигналов для {name}."
@@ -141,7 +142,7 @@ def _plain_reasons(
     ))
     matching_genres = [genre for genre in movie["genres"] if genre in desired]
     if matching_genres:
-        reasons.append(f"Подходит под выбранное настроение: {', '.join(matching_genres[:2])}.")
+        reasons.append(f"Приблизительно по жанрам: {', '.join(matching_genres[:2])}; эмоциональный тон не подтверждён.")
     if effective_max_runtime and movie.get("runtime"):
         reasons.append(f"Укладывается в выбранное время — {movie['runtime']} минут.")
     if movie.get("rating") and float(movie["rating"]) >= 7:

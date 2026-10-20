@@ -16,7 +16,7 @@ const box={document:{querySelector:s=>s==='#app'?root:null},localStorage:storage
  location:{hostname:'localhost'},setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout:()=>{},matchMedia:()=>({matches:false})};
 vm.createContext(box);
 vm.runInContext(fs.readFileSync('frontend/app.js','utf8').replace(/\ninit\(\);\s*$/,''),box);
-vm.runInContext(`render=()=>{};state.user='lera';openRoulette();let calls=[];
+vm.runInContext(`render=()=>{};state.user='lera';openRoulette();let calls=[],chosen=[];selectCatalogMovie=async id=>chosen.push(id);
 api=async(path,opts)=>{calls.push({path,body:JSON.parse(opts.body)});return {items:[{id:calls.length===1?'a':'b',title:'Real',genres:[],recommendation_reason:'Catalog'}]};};`,box);
 (async()=>{
  await vm.runInContext('spinRoulette()',box);
@@ -27,7 +27,7 @@ api=async(path,opts)=>{calls.push({path,body:JSON.parse(opts.body)});return {ite
  assert.equal(vm.runInContext('calls.length',box),1);
  vm.runInContext('finishRoulette(state.roulette);bindRoulette()',box);
  handlers.accept();
- assert.equal(vm.runInContext('state.roulette.accepted',box),'a');
+ assert.equal(vm.runInContext('chosen[0]',box),'a');
  assert.equal(vm.runInContext('calls.length',box),1); // no fake watched action
  await vm.runInContext('spinRoulette()',box);
  assert.equal(vm.runInContext('calls[1].body.seen_ids.join()',box),'a');
@@ -36,7 +36,7 @@ api=async(path,opts)=>{calls.push({path,body:JSON.parse(opts.body)});return {ite
  assert.equal(vm.runInContext('state.roulette.movie.id',box),'b');
  vm.runInContext('state.roulette=null;openRoulette()',box);
  assert.equal(vm.runInContext('state.roulette.seen.join()',box),'a,b');
- assert.equal(vm.runInContext('state.roulette.accepted',box),'a');
+ assert.equal(vm.runInContext('state.roulette.movie.id',box),'b');
  vm.runInContext(`state.roulette.movie={id:'b'};api=async()=>{throw Error('offline');};`,box);
  await vm.runInContext("rouletteAction('dislike')",box);
  assert.equal(vm.runInContext('state.roulette.movie.id',box),'b');
