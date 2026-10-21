@@ -32,7 +32,7 @@ from backend.database.db import db_session, generate_access_code, initialize, lo
 from backend.logging_filters import install_expected_disconnect_filter
 from backend.models.schemas import AvoidSimilarIn, EveningFeedbackIn, FeedbackIn, JoinIn, PreferencesIn, PrivacyDeleteIn, RestoreBackupIn, SwipeIn, UserAction
 from backend.network import active_port, invite_url, lan_ip
-from backend.movies.catalog import get_movie, search_movies
+from backend.movies.catalog import eligible_movie_count, get_movie, search_movies
 from backend.movies.search_query import SmartSearchIn
 from backend.movies.smart_search import search as smart_search
 from backend.movies.franchises import franchises
@@ -141,7 +141,8 @@ app = FastAPI(title="Tonight", version=APP_VERSION, lifespan=lifespan)
 @app.middleware('http')
 async def invalidate_personal_recommendations(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith('/api/') and not request.url.path.startswith('/api/search/smart/') and request.method in {'POST', 'PUT', 'PATCH', 'DELETE'} and response.status_code < 400:
+    path = request.scope['path']
+    if path.startswith('/api/') and not path.startswith('/api/search/smart/') and request.method in {'POST', 'PUT', 'PATCH', 'DELETE'} and response.status_code < 400:
         for session_id in list(manager.connections):
             await manager.broadcast(session_id, {'type': 'personal_changed'})
     return response
@@ -199,9 +200,10 @@ async def diagnostics() -> dict:
     poster_dir = ROOT / "data" / "posters"
     local_poster_count = sum(1 for path in poster_dir.glob("*") if path.is_file()) if poster_dir.exists() else 0
     ollama = await ollama_health()
+    available = eligible_movie_count()
     checks = [
         {"id": "database", "state": "ready" if integrity else "action", "title": "База фильмов", "detail": "Готова" if integrity else "Перезапустите Tonight и попробуйте ещё раз."},
-        {"id": "catalog", "state": "ready" if movie_count else "action", "title": "Каталог", "detail": f"Готово: {movie_count} фильмов" if movie_count else "Перезапустите Tonight, чтобы восстановить каталог."},
+        {"id": "catalog", "state": "ready" if available else "action", "title": "Каталог", "detail": f"Доступно: {available} фильмов из {movie_count}" if available else "Нет подтверждённых фильмов. Откройте «Каталог и обновления», загрузите каталог и повторите проверку."},
         {"id": "network", "state": "ready" if network_ready else "action", "title": "Домашняя сеть", "detail": "Телефон сможет подключиться по Wi-Fi." if network_ready else "Подключите этот компьютер к домашней Wi-Fi сети."},
         {"id": "images", "state": "ready", "title": "Обложки", "detail": f"Готово: {local_poster_count} загружено, остальные с запасными обложками."},
         {"id": "ollama", "state": "optional", "title": "Умные подсказки", "detail": "Подключены." if ollama["available"] and ollama["model_installed"] else "Необязательная функция: Tonight работает и без неё."},
@@ -231,7 +233,7 @@ async def local_usage_summary(request: Request) -> dict:
 
 @app.get("/api/movies/search")
 async def search_catalog(q: str = "") -> dict:
-    return {"items": search_movies(q)}
+    return {"items": await asyncio.to_thread(search_movies, q)}
 
 
 @app.post('/api/search/smart/{user_id}')
@@ -250,7 +252,7 @@ async def setup_status() -> dict:
     poster_count = sum(1 for path in poster_dir.glob("*") if path.is_file()) if poster_dir.exists() else 0
     ollama = await ollama_health()
     return {
-        "database": True, "catalog": count, "posters": poster_count, "tmdb_movies": tmdb_count, "ollama": ollama,
+        "database": True, "catalog": count, "catalog_available": eligible_movie_count(), "posters": poster_count, "tmdb_movies": tmdb_count, "ollama": ollama,
         "network": True, "catalog_sync": sync_status(), "model_command": f"ollama pull {settings.ollama_model}",
         "poster_command": "$env:TMDB_READ_TOKEN=\"ВАШ_TOKEN\"; .\\.venv\\Scripts\\python.exe scripts\\enrich_starter_catalog.py",
     }
@@ -414,7 +416,7 @@ def _has_evening_access(request: Request, session_id: int) -> bool:
 
 
 def _is_public_remote_api(request: Request) -> bool:
-    path = request.url.path
+    path = request.scope['path']
     if request.method == "GET" and path in {
         "/api/health", "/api/diagnostics", "/api/setup/status", "/api/invite",
         "/api/invite/qr.svg", "/api/sessions/active",
@@ -429,7 +431,7 @@ def _is_public_remote_api(request: Request) -> bool:
 
 @app.middleware("http")
 async def require_evening_code_for_remote_api(request: Request, call_next):
-    path = request.url.path
+    path = request.scope['path']
     # Compatibility only: retired clients cannot create or mutate rooms.
     if path.startswith('/api/movie-match/') or (path.startswith('/api/sessions/') and '/match' in path) or (path == '/api/sessions/new' and request.query_params.get('movie_match') == 'true'):
         return JSONResponse({'detail': 'Выбор по ссылке больше недоступен. Откройте главную Tonight и выберите «По знакомым фильмам».', 'redirect': '/'}, status_code=410)
@@ -549,9 +551,12 @@ async def join_session(session_id: int, payload: JoinIn, request: Request) -> di
             raise HTTPException(404, "Вечер не найден") from exc
         if not valid:
             raise HTTPException(403, "Введите код с экрана Tonight")
-    ensure_participant(session_id, payload.user_id)
-    await publish_state(session_id, "joined")
-    return session_state(session_id)
+    try:
+        ensure_participant(session_id, payload.user_id)
+        await publish_state(session_id, "joined")
+        return session_state(session_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @app.post("/api/sessions/{session_id}/connection-restored")
@@ -567,8 +572,11 @@ async def connection_restored(session_id: int, request: Request) -> dict:
 
 @app.post("/api/sessions/{session_id}/preferences")
 async def preferences(session_id: int, payload: PreferencesIn) -> dict:
-    save_preferences(session_id, payload)
-    await publish_state(session_id, "preferences")
+    try:
+        save_preferences(session_id, payload)
+        await publish_state(session_id, "preferences")
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
     return {"ok": True}
 
 
@@ -1192,7 +1200,7 @@ async def websocket_session(websocket: WebSocket, session_id: int, user_id: str,
     if room and room['match_data'] != '{}':
         await websocket.close(code=1008)
         return
-    if not _is_loopback(websocket.client.host if websocket.client else None):
+    if not websocket.headers.get('origin') or not _is_loopback(websocket.client.host if websocket.client else None):
         if not secrets.compare_digest(code or "", session_access_code(session_id)):
             await websocket.close(code=1008)
             return
@@ -1233,3 +1241,8 @@ async def frontend(path: str):
     if not index.exists():
         return HTMLResponse("Tonight frontend is missing", status_code=503)
     return FileResponse(index)
+
+
+# Outermost: reject untrusted inputs before any security middleware or mounts.
+from backend.request_security import RequestBoundary
+app.add_middleware(RequestBoundary)

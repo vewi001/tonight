@@ -60,7 +60,7 @@ def test_explicit_russian_translation_is_required_not_just_language_parameter():
     ('theatrical_release_type',1),('theatrical_release_type',4),('release_status','In Production'),
 ])
 def test_all_offers_and_selection_routes_reject_unconfirmed_but_keep_saved_rows(field,value):
-    from fastapi.testclient import TestClient
+    from tests.http_client import TestClient
     from backend.database.db import db_session, dumps
     from backend.main import app
     from backend.movies.catalog import get_movie, search_movies
@@ -134,7 +134,12 @@ def test_production_seed_does_not_fabricate_proof(monkeypatch,tmp_path):
     initialize(); seed_movies()
     with db_session() as db:
         assert db.execute('SELECT COUNT(*) FROM movies').fetchone()[0]>0
-        assert db.execute('SELECT COUNT(*) FROM movies WHERE russian_title IS NOT NULL OR theatrical_release_date IS NOT NULL').fetchone()[0]==0
+        from backend.movies.starter_verified import VERIFIED_STARTER
+        rows = [dict(row) for row in db.execute('SELECT * FROM movies')]
+        assert {row['id'] for row in rows if is_released(row)} == {proof['id'] for proof in VERIFIED_STARTER}
+        for row in rows:
+            if row['id'] not in {proof['id'] for proof in VERIFIED_STARTER}:
+                assert row['russian_title'] is None and row['theatrical_release_date'] is None
 
 
 def test_verified_metadata_survives_catalog_package_and_requires_new_reader(tmp_path):

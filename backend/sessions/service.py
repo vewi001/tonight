@@ -41,17 +41,28 @@ def session_access_code(session_id: int) -> str:
         return row["access_code"]
 
 
+def _ensure_participant(db, session_id: int, user_id: str) -> None:
+    # Lock before checking, so a concurrent deletion cannot turn a stale ID
+    # into an FK error between validation and the participant write.
+    if not db.in_transaction:
+        db.execute('BEGIN IMMEDIATE')
+    session = db.execute('SELECT status FROM sessions WHERE id=?', (session_id,)).fetchone()
+    if not session or session['status'] == 'abandoned':
+        raise ValueError('Вечер не найден или уже завершён. Откройте главную Tonight.')
+    db.execute(
+        "INSERT OR IGNORE INTO participants(session_id,user_id,joined_at) VALUES(?,?,?)",
+        (session_id, user_id, datetime.now().isoformat(timespec="seconds")),
+    )
+
+
 def ensure_participant(session_id: int, user_id: str) -> None:
     with db_session() as db:
-        db.execute(
-            "INSERT OR IGNORE INTO participants(session_id,user_id,joined_at) VALUES(?,?,?)",
-            (session_id, user_id, datetime.now().isoformat(timespec="seconds")),
-        )
+        _ensure_participant(db, session_id, user_id)
 
 
 def save_preferences(session_id: int, payload: Any) -> None:
-    ensure_participant(session_id, payload.user_id)
     with db_session() as db:
+        _ensure_participant(db, session_id, payload.user_id)
         db.execute(
             """UPDATE participants SET moods=?,energy=?,max_runtime=?,min_year=?,disliked_genres=?
             WHERE session_id=? AND user_id=?""",

@@ -67,6 +67,13 @@ def get_movie(movie_id: str) -> dict[str, Any] | None:
     return row_to_movie(row) if row else None
 
 
+def eligible_movie_count() -> int:
+    """Use the same availability rule as offers, without touching image files."""
+    with db_session() as db:
+        return sum(is_released(dict(row)) for row in db.execute(
+            'SELECT title,russian_title,release_status,theatrical_release_date,theatrical_release_type,theatrical_release_country,release_date FROM movies'))
+
+
 def all_movies() -> list[dict[str, Any]]:
     with db_session() as db:
         rows = db.execute("SELECT * FROM movies ORDER BY rating DESC, title").fetchall()
@@ -77,14 +84,21 @@ def search_movies(query: str, limit: int = 12) -> list[dict[str, Any]]:
     terms = [term for term in query.lower().replace("ё", "е").split() if len(term) > 1 and term not in {"как", "что", "мне", "хочу", "фильм"}]
     if not terms:
         return []
-    results: list[tuple[int, dict[str, Any]]] = []
-    for movie in all_movies():
+    results = []
+    with db_session() as db:
+        rows = db.execute('SELECT * FROM movies').fetchall()
+    # Rank lightweight metadata first. Building image URLs/stat'ing local files
+    # for every row used to dominate this search (including nonmatches).
+    for row in rows:
+        movie = dict(row)
         if not is_released(movie):
             continue
-        haystacks = {"title": f"{movie['title']} {movie.get('original_title') or ''}".lower(), "keywords": " ".join(movie.get("keywords") or []).lower(), "genres": " ".join(movie.get("genres") or []).lower(), "overview": (movie.get("overview") or "").lower()}
+        haystacks = {"title": f"{movie['title']} {movie.get('original_title') or ''}".lower(), "keywords": " ".join(loads(movie.get("keywords"), [])).lower(), "genres": " ".join(normalize_genres(loads(movie.get("genres"), []))).lower(), "overview": (movie.get("overview") or "").lower()}
+        haystacks = {key: value.replace('ё', 'е') for key, value in haystacks.items()}
         score = sum(8 if term in haystacks["title"] else 4 if term in haystacks["keywords"] else 2 if term in haystacks["genres"] else 1 if term in haystacks["overview"] else 0 for term in terms)
         if score: results.append((score, movie))
-    return [movie for _, movie in sorted(results, key=lambda item: (-item[0], -(item[1].get("rating") or 0), item[1]["title"]))[:limit]]
+    ranked = sorted(results, key=lambda item: (-item[0], -(item[1].get("rating") or 0), item[1]["title"]))[:limit]
+    return [row_to_movie(movie) for _, movie in ranked]
 
 
 def swipe_deck(

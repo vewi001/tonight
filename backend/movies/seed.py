@@ -88,6 +88,8 @@ FRANCHISES = {
 
 
 def seed_movies() -> int:
+    from backend.movies.starter_verified import VERIFIED_STARTER
+    original_titles = {movie[0]: movie[1] for movie in MOVIES}
     with db_session() as db:
         for movie in MOVIES:
             movie_id, title, original, year, genres, runtime, rating, keywords, director, overview = movie
@@ -96,6 +98,18 @@ def seed_movies() -> int:
                 (id,title,original_title,year,genres,overview,runtime,rating,vote_count,keywords,director,cast_names,franchise_key,franchise_order,source)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (movie_id, title, original, year, dumps(genres), overview, runtime, rating, 1000, dumps(keywords), director, "[]", *FRANCHISES.get(movie_id, (None, None)), "starter"),
+            )
+        # Retain actual imported availability for a small offline starter set.
+        # Never overwrite enriched/imported or edited catalog records.
+        for proof in VERIFIED_STARTER:
+            fields = [key for key in proof if key != 'id']
+            db.execute(
+                f"""UPDATE movies SET {','.join(key+'=?' for key in fields)}
+                WHERE id=? AND source='starter' AND tmdb_id IS NULL AND title=?
+                AND russian_title IS NULL AND release_status IS NULL AND release_date IS NULL
+                AND theatrical_release_date IS NULL AND theatrical_release_type IS NULL
+                AND theatrical_release_country IS NULL""",
+                (*[proof[key] for key in fields], proof['id'], original_titles[proof['id']]),
             )
         return db.execute("SELECT COUNT(*) FROM movies").fetchone()[0]
 

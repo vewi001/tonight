@@ -4,7 +4,7 @@ import sqlite3
 import httpx
 import pytest
 from PIL import Image
-from fastapi.testclient import TestClient
+from tests.http_client import TestClient
 
 from backend.database.db import initialize,connect
 from backend.movies.catalog_expand import CatalogExpansion,ExpansionError
@@ -100,6 +100,33 @@ def test_bad_key_or_network_does_not_expose_token(tmp_path):
     manager.reserve(20);manager.run()
     assert manager.status()['phase']=='error' and 'app-test-token' not in str(manager.status())
     with acquire_update_lease(tmp_path):pass
+
+
+def test_network_failure_preserves_catalog_and_retry_can_complete(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    import backend.database.db as database_module
+    from backend.movies.seed import seed_movies
+    online = False
+    def handler(request):
+        if not online:
+            raise httpx.ConnectError('offline test')
+        return provider(request)
+    manager,database = expansion(tmp_path,handler)
+    monkeypatch.setattr(database_module, 'settings', SimpleNamespace(db_path=database))
+    assert seed_movies() == 72
+    monkeypatch.setattr(manager.cancelled,'wait',lambda _:False)
+    with connect(database) as db:
+        before = [tuple(row) for row in db.execute('SELECT * FROM movies')]
+        assert sum(is_released(dict(row)) for row in db.execute('SELECT * FROM movies')) == 20
+    manager.reserve(20);manager.run()
+    assert manager.status()['phase']=='error'
+    with connect(database) as db:
+        assert [tuple(row) for row in db.execute('SELECT * FROM movies')]==before
+    online = True
+    manager.reserve(20);manager.run()
+    assert manager.status()['phase']=='done' and manager.status()['added']==20
+    with connect(database) as db:
+        assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
 
 
 def test_phone_needs_evening_code_but_can_start_and_observe_same_job(tmp_path,monkeypatch):

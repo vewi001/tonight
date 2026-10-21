@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.movies.genres import normalize_genres
 
@@ -11,15 +11,23 @@ Reaction = Literal["love", "like", "okay", "dislike", "unseen"]
 
 
 class PreferencesIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     user_id: UserId
     # The interface deliberately exposes all of its mood chips as combinable.
     # Keep validation in step with it so an enthusiastic choice cannot strand a
     # person on the preferences screen with an opaque 422 response.
-    moods: list[str] = Field(min_length=1, max_length=11)
+    moods: list[Literal['laugh', 'smart', 'scary', 'emotional', 'cozy', 'action', 'mystery', 'wow', 'romance', 'atmosphere', 'surprise']] = Field(min_length=1, max_length=11)
     energy: Literal["low", "medium", "high"]
-    max_runtime: int | None = None
-    min_year: int | None = None
+    max_runtime: int | None = Field(default=None, ge=1, le=1440, strict=True)
+    min_year: int | None = Field(default=None, ge=1888, le=2100, strict=True)
     disliked_genres: list[str] = Field(default_factory=list, max_length=12)
+
+    @field_validator('moods')
+    @classmethod
+    def unique_moods(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError('Настроения не должны повторяться')
+        return value
 
     @field_validator("disliked_genres")
     @classmethod

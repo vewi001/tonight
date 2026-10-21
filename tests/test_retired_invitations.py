@@ -3,7 +3,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_client import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from backend.database.db import db_session, dumps, initialize

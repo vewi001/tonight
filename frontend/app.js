@@ -108,7 +108,7 @@ async function api(path, options = {}) {
   try {
     response = await fetch(path, {
       ...options,
-      headers: { 'Content-Type': 'application/json', ...eveningHeaders, ...(options.headers || {}) },
+      headers: { 'Content-Type': 'application/json', 'X-Tonight-Request': '1', ...eveningHeaders, ...(options.headers || {}) },
     });
   } catch(error) {
     if(error.name==='AbortError')throw error;
@@ -207,22 +207,23 @@ function render() {
 
 function renderSetup() {
   const o = state.setup?.ollama || {};
+  const available = state.setup?.catalog_available ?? 0;
   return shell(`<section class="panel" style="margin-top:8vh">
     <p class="eyebrow">Первый запуск</p><h2>Добро пожаловать в Tonight 🍿</h2>
     <p class="lede">Оцените впечатления от знакомых фильмов. Tonight учтёт ваши ответы при подборе для двоих.</p>
     <div class="setup-list">
-      <div class="setup-row"><span>Каталог готов</span><strong class="ok">✓ ${state.setup?.catalog || 0} фильмов</strong></div>
+      <div class="setup-row"><span>Доступно для выбора</span><strong class="${available?'ok':'warn'}">${available} из ${state.setup?.catalog || 0} фильмов</strong></div>
       <div class="setup-row"><span>Постеры загружены</span><strong class="${state.setup?.posters ? 'ok':'warn'}">${state.setup?.posters ? `✓ ${state.setup.posters}`:'○ Постеры пока не загружены'}</strong></div>
-      <div class="setup-row"><span>Можно выбирать фильм</span><strong class="ok">✓ Готово</strong></div>
+      <div class="setup-row"><span>Можно выбирать фильм</span><strong class="${available?'ok':'warn'}">${available?'✓ Готово':'Нужен каталог'}</strong></div>
     </div>
-    <p class="lede">Всё готово к киновечеру 🍿</p>
+    <p class="lede">${available?'Всё готово к киновечеру 🍿':'Нет подтверждённых фильмов. Откройте «Каталог и обновления» и загрузите фильмы. Для загрузки нужен интернет; при ошибке можно повторить попытку. Уже сохранённый каталог работает без сети.'}</p>
     <details class="setup-help"><summary>Если что-то не работает</summary><div class="setup-list technical-list">
       <div class="setup-row"><span>Database</span><strong class="ok">✓ Готова</strong></div>
       <div class="setup-row"><span>Ollama</span><strong class="${o.available ? 'ok':'warn'}">${o.available ? '✓ Подключена':'○ Необязательна'}</strong></div>
       <div class="setup-row"><span>AI model</span><strong class="${o.model_installed ? 'ok':'warn'}">${o.model_installed ? `✓ ${esc(o.model)}`:'○ Работаем без неё'}</strong></div>
       <div class="setup-row"><span>Local network</span><strong class="ok">✓ Tonight доступен</strong></div>
     </div>${!o.model_installed ? `<p>Tonight работает и без Ollama. Для умных подсказок на этом компьютере:</p><div class="choice"><code>${esc(state.setup?.model_command || '')}</code></div>` : ''}${!state.setup?.posters ? `<p>Чтобы один раз загрузить настоящие постеры через TMDB:</p><div class="choice"><code>${esc(state.setup?.poster_command)}</code></div>` : ''}</details>
-    <div class="footer-actions"><button class="button large" data-action="finish-setup">Продолжить</button></div>
+    <div class="footer-actions">${available?'<button class="button large" data-action="finish-setup">Продолжить</button>':'<button class="button" data-view="library">Каталог и обновления</button><button class="button secondary" data-action="retry-setup">Повторить проверку</button>'}</div>
   </section>`, { narrow:true, nav:false });
 }
 
@@ -356,6 +357,7 @@ function renderChoices() {
 }
 
 async function openChoiceMode(mode) {
+  if(state.setup?.catalog_available===0){state.view='setup';render();return;}
   ++state.navigationRequest;
   smartSearch.cancel();
   if (!state.user) { state.pendingChoice=mode; state.view='home'; render(); return; }
@@ -713,6 +715,7 @@ function bindCommon() {
   root.querySelectorAll('[data-user]').forEach(el => el.addEventListener('click', () => selectUser(el.dataset.user)));
   root.querySelector('[data-access-code]')?.addEventListener('input', event => { state.accessCode=event.target.value.replace(/\D/g, '').slice(0,6); event.target.value=state.accessCode; });
   root.querySelector('[data-action="finish-setup"]')?.addEventListener('click', () => { localStorage.setItem('tonight:setup','1'); state.view='home'; render(); });
+  root.querySelector('[data-action="retry-setup"]')?.addEventListener('click', async () => {try{state.setup=await api('/api/setup/status');render();}catch(e){toast(e.message);}});
   root.querySelector('[data-action="copy-invite"]')?.addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(state.invite.url); toast('Адрес скопирован ✓'); }
     catch (_) { toast(`Адрес: ${state.invite.display_url}`); }
@@ -836,6 +839,7 @@ function switchUser() {
 }
 
 async function continueSession() {
+  if(state.setup?.catalog_available===0){state.view='setup';render();return;}
   try {
     if (state.session.status === 'completed') {
       state.session = await api(`/api/sessions/${state.session.id}/restart`, {method:'POST'});
@@ -916,7 +920,9 @@ async function savePrefs() {
 
 async function loadDeck() {
   try {
-    const data = await api(`/api/sessions/${state.session.id}/swipe/${state.user}`); state.deck=data.movies; state.total=data.total; state.view=state.deck.length?'swipe':'waiting';
+    const data = await api(`/api/sessions/${state.session.id}/swipe/${state.user}`); state.deck=data.movies; state.total=data.total;
+    if(!data.total){state.view='filters';toast('Нет доступных карточек. Проверьте ограничения или пополните каталог.');}
+    else state.view=state.deck.length?'swipe':'waiting';
   } catch (e) { toast(e.message); state.view='home'; }
 }
 
@@ -1071,7 +1077,7 @@ async function importBackup() {
   if (!file) { toast('Сначала выберите файл копии'); return; }
   if (!window.confirm('Восстановить данные из этого файла? Текущие данные будут заменены, но Tonight сначала создаст страховочную копию.')) return;
   try {
-    const response = await fetch('/api/backups/import?confirmed=true', {method:'POST', headers:{'Content-Type': file.type || 'application/vnd.sqlite3'}, body:file});
+    const response = await fetch('/api/backups/import?confirmed=true', {method:'POST', headers:{'Content-Type': file.type || 'application/vnd.sqlite3', 'X-Tonight-Request':'1'}, body:file});
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.detail || 'Не получилось восстановить данные');
     toast('Данные восстановлены. Обновляем экран…');
@@ -1312,6 +1318,7 @@ async function init({destination='home'}={}) {
     [state.setup,state.session,state.invite]=await Promise.all([api('/api/setup/status'),api('/api/sessions/active'),api('/api/invite')]);
     if (isRemoteClient() || new URLSearchParams(location.search).get('join') === '1') localStorage.setItem('tonight:setup','1');
     state.view=destination!=='home'||localStorage.getItem('tonight:setup')?destination:'setup';
+    if(state.setup.catalog_available===0)state.view='setup';
     if(state.user && isRemoteClient() && !state.accessCode){
       state.user=null; localStorage.removeItem('tonight:user');
     }
@@ -1549,6 +1556,11 @@ function openTinder() {
   if(state.tinder?.user!==state.user){
     let saved;try{saved=JSON.parse(sessionStorage.getItem(`tonight:tinder:${state.user}`));}catch(_){}
     state.tinder=saved?.user===state.user?saved:{user:state.user,queue:[],seen:[],history:[],save:false};
+    // Revalidate a restored deck against current server restrictions. Queued
+    // cards were not acted on and must remain eligible for that fresh request.
+    const queued=new Set(state.tinder.queue.map(movie=>movie.id));
+    state.tinder.seen=state.tinder.seen.filter(id=>!queued.has(id));
+    state.tinder.queue=[];state.tinder.loaded=false;state.tinder.error='';
     try { const preference=localStorage.getItem(`tonight:tinder-save:${state.user}`); if(preference!==null)state.tinder.save=preference==='1'; } catch(_){}
     state.tinder.busy=false;state.tinder.detail=false;
   }
@@ -1564,8 +1576,8 @@ async function fetchTinder(fresh=false) {
     if(request!==state.tinderRequest || state.tinder!==t || state.user!==t.user)return;
     t.queue=data.items;t.loaded=true;t.cold=data.cold_start;t.catalogAvailable=data.catalog_available;
     t.seen=[...new Set([...t.seen,...data.items.map(m=>m.id)])];
-  }catch(e){t.error=e.message;}
-  finally{t.busy=false;saveTinder();if(state.view==='tinder'&&state.tinder===t)render();}
+  }catch(e){if(request===state.tinderRequest&&state.tinder===t&&state.user===t.user)t.error=e.message;}
+  finally{if(request===state.tinderRequest&&state.tinder===t&&state.user===t.user){t.busy=false;saveTinder();if(state.view==='tinder')render();}}
 }
 function renderTinder(){
   const t=state.tinder,m=t?.queue[0];if(!t)return shell('');
@@ -1579,7 +1591,7 @@ function renderTinder(){
     <article class="tinder-card" data-kt-card tabindex="0" aria-label="${esc(m.title)}">
       <div class="tinder-image">${poster(m)}<span class="tinder-direction" aria-hidden="true"></span></div>
       <div class="tinder-copy">${details}<p>${esc(tonightSynopsis(m))}</p><button class="button ghost" data-kt-details>Подробнее о фильме</button></div>
-    </article><div class="tinder-action-panel"><div class="tinder-controls" aria-label="Действия с фильмом">${[['dislike','←','Не интересно'],['watched','↑','Уже смотрел'],['interest','→','Интересно']].map(([action,icon,label])=>`<button class="button ${action==='interest'?'':'secondary'}" data-kt-action="${action}" ${disabled}><span aria-hidden="true">${icon}</span> ${label}</button>`).join('')}${undo}</div></div>`:`<div class="empty" role="status"><h2>${t.busy?'Подбираем фильмы…':'Фильмы закончились'}</h2><p>${t.busy?'Учитываем ваш вкус.':t.catalogAvailable===0?'В каталоге нет подтверждённых фильмов. Откройте каталог для обновления.':'Доступные варианты просмотрены. Новая сессия учитывает сохранённые действия.'}</p>${!t.busy?exclusionEmptyHelp():''}${!t.busy?'<button class="button" data-kt-new>Новая сессия</button><button class="button ghost" data-view="library">Каталог</button>':''}${undo}</div>`}
+    </article><div class="tinder-action-panel"><div class="tinder-controls" aria-label="Действия с фильмом">${[['dislike','←','Не интересно'],['watched','↑','Уже смотрел'],['interest','→','Интересно']].map(([action,icon,label])=>`<button class="button ${action==='interest'?'':'secondary'}" data-kt-action="${action}" ${disabled}><span aria-hidden="true">${icon}</span> ${label}</button>`).join('')}${undo}</div></div>`:`<div class="empty" role="status"><h2>${t.error?'Не удалось загрузить карточки':t.busy?'Подбираем фильмы…':!t.loaded?'Карточки ещё не загружены':'Фильмы закончились'}</h2><p>${t.error?'Повторите загрузку кнопкой выше.':t.busy?'Учитываем ваш вкус.':!t.loaded?'Загружаем доступные варианты.':t.catalogAvailable===0?'В каталоге нет подтверждённых фильмов. Откройте каталог для обновления.':'Доступные варианты просмотрены. Новая сессия учитывает сохранённые действия.'}</p>${!t.busy&&t.loaded&&!t.error?exclusionEmptyHelp():''}${!t.busy&&t.loaded&&!t.error?'<button class="button" data-kt-new>Новая сессия</button><button class="button ghost" data-view="library">Каталог</button>':''}${undo}</div>`}
     <p class="sr-only" aria-live="polite">${m?`Следующий фильм: ${esc(m.title)}`:'Нет карточки'}</p></section>`,{narrow:true});
 }
 
@@ -1814,15 +1826,17 @@ async function refreshExclusions() {
     const previous=state.exclusions;
     state.exclusions=data;state.exclusionsFor=sid;state.exclusionsAt=Date.now();
     changed=!previous || JSON.stringify(previous)!==JSON.stringify(data);
-    if(changed)invalidateExclusionResults();
+    // The first response describes rules the server already applied to the
+    // concurrent deck. It is a baseline, not a change invalidating that deck.
+    if(changed && previous && previous.user===user)invalidateExclusionResults();
   }catch(e){state.exclusionError=e.message;}
-  finally {state.exclusionsPending=false;if(state.user===user && (changed || state.exclusionError))render();else if(state.user && state.user!==user)refreshExclusions();}
+  finally {state.exclusionsPending=false;if(state.user===user){if(changed || state.exclusionError)render();if(changed && state.view==='tinder' && state.tinder?.user===user && !state.tinder.loaded && !state.tinder.busy && !state.tinder.error)fetchTinder();}else if(state.user)refreshExclusions();}
 }
 function invalidateExclusionResults() {
   state.personal=null;state.personalAt=0;state.personalRevision++;
   state.tonightRequest++;state.tinderRequest++;state.rouletteRequest++;
   if(state.tonight){state.tonight.busy=false;state.tonight.data=null;state.tonight.detail=null;state.tonight.step=Math.min(3,state.tonight.step);saveTonight();}
-  if(state.tinder){state.tinder.queue=[];state.tinder.busy=false;state.tinder.loaded=false;state.tinder.detail=false;saveTinder();}
+  if(state.tinder){const queued=new Set(state.tinder.queue.map(movie=>movie.id));state.tinder.seen=state.tinder.seen.filter(id=>!queued.has(id));state.tinder.queue=[];state.tinder.busy=false;state.tinder.loaded=false;state.tinder.detail=false;saveTinder();}
   if(state.roulette){clearTimeout(state.roulette.timer);state.roulette.movie=null;state.roulette.busy=false;state.roulette.spinning=false;state.roulette.accepted=null;state.roulette.acceptedTitle=null;state.roulette.empty=false;saveRoulette();}
 }
 async function exclusionsChanged() {

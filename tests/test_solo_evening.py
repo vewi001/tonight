@@ -1,5 +1,5 @@
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_client import TestClient
 
 from backend.database.db import db_session, initialize
 from backend.main import app, TonightModeIn

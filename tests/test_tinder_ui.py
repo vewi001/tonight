@@ -5,6 +5,11 @@ from pathlib import Path
 import pytest
 
 
+def test_loading_orders_errors_profiles_and_restored_restrictions():
+    result = subprocess.run(['node', 'tests/tinder_loading_checks.cjs'], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_lost_response_reuses_action_and_undo_restores_card():
     if not shutil.which('node'): pytest.skip('Node required')
     script = r"""

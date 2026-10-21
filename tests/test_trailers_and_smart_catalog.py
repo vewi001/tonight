@@ -5,7 +5,7 @@ from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
+from tests.http_client import TestClient
 
 from backend.database.db import db_session, dumps, initialize
 from backend.main import app
@@ -118,7 +118,7 @@ def test_smart_import_uses_all_feeds_and_caches_trailers(monkeypatch):
     imported = import_smart_catalog("secret", pages=3, images=False, min_votes=50, today=date(2026, 10, 6))
     assert imported == 3
     with db_session() as db:
-        rows = db.execute("SELECT tmdb_id,catalog_sources,trailer_key,release_date FROM movies WHERE tmdb_id>=910001 ORDER BY tmdb_id").fetchall()
+        rows = db.execute("SELECT tmdb_id,catalog_sources,trailer_key,release_date FROM movies WHERE tmdb_id IN (910001,910002,910003) ORDER BY tmdb_id").fetchall()
     assert [row["tmdb_id"] for row in rows] == [910001, 910002, 910003]
     assert rows[0]["trailer_key"] == "TRAILER0001"
     assert rows[0]["release_date"] == "2024-01-01"
@@ -127,6 +127,9 @@ def test_smart_import_uses_all_feeds_and_caches_trailers(monkeypatch):
 
 def test_trailer_backfill_caches_english_fallback_and_does_not_repeat(monkeypatch):
     with db_session() as db:
+        # This test controls one missing trailer; verified offline starter IDs
+        # now also exist and are not part of the mocked backfill scenario.
+        db.execute('UPDATE movies SET tmdb_id=NULL')
         db.execute("UPDATE movies SET tmdb_id=940001 WHERE id='arrival'")
 
     calls = []
@@ -214,6 +217,7 @@ def test_legacy_deduplication_preserves_swipe_deck_position():
 
 
 def test_weekly_sync_uses_smart_catalog_and_records_success(monkeypatch):
+    monkeypatch.setattr(import_tmdb, 'backfill_trailers', lambda *args, **kwargs: 0)
     monkeypatch.setattr(catalog_sync, "settings", SimpleNamespace(
         tmdb_read_token="present", catalog_auto_update=True, catalog_refresh_days=7,
         catalog_pages=12, catalog_images=True, catalog_min_votes=75,

@@ -140,7 +140,7 @@ def test_public_mirror_config_can_enable_or_disable_yandex(clean_mirror):
 
 
 def test_unavailable_https_mirror_automatically_falls_back_to_github(tmp_path, clean_mirror, monkeypatch):
-    from test_app_download_resume import package
+    from tests.test_app_download_resume import package
     import backend.auto_update as download
     monkeypatch.setenv('TONIGHT_DOWNLOAD_MIRROR', 'https://mirror.example/tonight')
     monkeypatch.setattr(download.time, 'sleep', lambda _: None)

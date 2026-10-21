@@ -1,7 +1,7 @@
 from contextlib import closing
 import asyncio
 
-from fastapi.testclient import TestClient
+from tests.http_client import TestClient
 import pytest
 
 from backend import main

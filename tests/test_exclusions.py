@@ -2,7 +2,7 @@
 from datetime import date, timedelta
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_client import TestClient
 
 from backend.main import app, TonightModeIn, RouletteIn
 from backend.database.db import db_session, initialize, dumps

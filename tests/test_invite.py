@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
+from tests.http_client import TestClient
 
 from backend.main import app
 from backend.network import invite_url
@@ -29,7 +29,7 @@ def test_invite_api_exposes_current_evening_and_qr(monkeypatch):
 def test_frontend_keeps_technical_setup_details_collapsed():
     source = (app_dir() / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert "Каталог готов" in source
+    assert "Доступно для выбора" in source
     assert "Постеры загружены" in source
     assert "Можно выбирать фильм" in source
     assert "Если что-то не работает" in source

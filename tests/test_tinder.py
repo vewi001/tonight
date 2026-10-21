@@ -1,6 +1,6 @@
 import uuid
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_client import TestClient
 from backend.main import app
 from backend.database.db import db_session, initialize
 from backend.recommendation.taste_profile import taste_signals, reset_profile

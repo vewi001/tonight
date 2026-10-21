@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_client import TestClient
 
 from backend import main
 from backend.backups import create_backup, import_backup, list_backups, restore_backup
