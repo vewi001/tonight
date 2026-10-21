@@ -33,6 +33,7 @@ def row_to_movie(row: Any) -> dict[str, Any]:
         "poster_url": media_url(row["id"], "poster", row["poster_path"]),
         "poster_available": bool((row["poster_path"] and Path(row["poster_path"]).is_file()) or local_media(row["id"], "poster")),
         "backdrop_url": media_url(row["id"], "backdrop", row["backdrop_path"]),
+        "backdrop_available": bool((row["backdrop_path"] and Path(row["backdrop_path"]).is_file()) or local_media(row["id"], "backdrop")),
     }
 
 

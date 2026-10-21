@@ -78,6 +78,11 @@ p { line-height:1.65; }
 .full-synopsis { line-height:1.75; white-space:pre-line; }
 .selected-layout { gap:32px; align-items:start; }
 .selected-layout .footer-actions { gap:10px; }
+.result-layout { position:relative; z-index:2; display:grid; grid-template-columns:minmax(150px,230px) minmax(0,1fr); align-items:center; gap:clamp(20px,4vw,48px); padding:clamp(24px,4vw,48px); }
+.result-layout .result-content { padding:0; max-width:none; }
+.result-content h1 { overflow-wrap:anywhere; }
+.result-poster { min-width:0; }
+.result-poster>img,.result-poster>.poster-placeholder { display:block; width:100%; height:auto; aspect-ratio:2/3; object-fit:contain; border-radius:16px; }
 .viewing-context { display:flex; gap:12px; align-items:center; margin:20px 0; color:var(--muted); font-size:.9rem; }
 .viewing-context select { color:var(--text); background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:10px 14px; min-height:44px; font:inherit; }
 .history-card h3 { font-size:1.2rem; }
@@ -259,6 +264,14 @@ p { line-height:1.65; }
   .selected-layout>div>h1 { grid-column:2; grid-row:2; font-size:1.6rem; margin:0; }
   .selected-layout>div>.meta { grid-column:2; grid-row:3; font-size:.82rem; gap:4px; }
   .selected-layout .viewing-context { margin:4px 0; }
+  .result-layout { grid-template-columns:90px minmax(0,1fr); align-items:start; gap:12px 14px; padding:18px; }
+  .result-layout .result-content { display:contents; }
+  .result-layout .result-content>* { grid-column:1/-1; min-width:0; }
+  .result-layout .result-poster { grid-column:1; grid-row:1/5; }
+  .result-layout .match { grid-column:2; grid-row:1; justify-self:start; margin:0; padding:4px 8px; font-size:.78rem; }
+  .result-layout .eyebrow { grid-column:2; grid-row:2; margin:0; }
+  .result-layout .result-content>h1 { grid-column:2; grid-row:3; margin:0; font-size:clamp(1.25rem,5.5vw,1.6rem); }
+  .result-layout .meta { grid-column:2; grid-row:4; gap:4px; font-size:.75rem; }
   .selected-layout .footer-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:0 0 12px; }
   .selected-layout .footer-actions>.button:first-child,.selected-layout .footer-actions>a { grid-column:1/-1; }
   .selected-layout .footer-actions .button { padding:12px 8px; font-size:.9rem; }
