@@ -16,8 +16,6 @@ Tonight — бесплатный локальный помощник выбор�
 [**Скачать Tonight для Windows**](https://github.com/vewi001/tonight/releases/download/v1.13.0/Tonight-portable-1.13.0.zip)
 · [Что нового в 1.13.0](https://github.com/vewi001/tonight/releases/tag/v1.13.0)
 · [Обновить установленную версию](https://github.com/vewi001/tonight/releases/download/v1.13.0/Tonight-update-1.13.0.zip)
-· [Зеркало на Яндекс Диске](https://disk.yandex.ru/d/fA042rBy8NJ1aA/v1.13.0)
-· [План развития](ROADMAP.md)
 
 ### Как проходит вечер
 
