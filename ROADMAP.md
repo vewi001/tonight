@@ -1,6 +1,6 @@
 # Roadmap Tonight
 
-Актуальный стабильный выпуск — [Tonight 1.9.0](https://github.com/vewi001/tonight/releases/tag/v1.9.0) от 16.10.2026.
+Актуальный стабильный выпуск — [Tonight 1.13.0](https://github.com/vewi001/tonight/releases/latest) от 21.10.2026.
 
 Это публичный план дальнейшего развития Tonight. Он показывает
 направление работы, а не обещает даты: порядок может меняться после реального

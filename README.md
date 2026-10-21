@@ -155,7 +155,7 @@ Tonight IQ, постоянные исключения и ограничения 
 ### Переносимая версия для Windows
 
 Скачайте `Tonight-portable-1.13.0.zip` со страницы
-[Releases](https://github.com/vewi001/tonight/releases/tag/v1.11.4), распакуйте и дважды нажмите
+[Releases](https://github.com/vewi001/tonight/releases/latest), распакуйте и дважды нажмите
 `Tonight.exe`. Всё нужное для работы уже внутри: отдельный Python устанавливать
 не нужно, а маленькое окно Tonight позволяет открыть приложение в браузере или
 остановить его после вечера.
@@ -190,7 +190,7 @@ Tonight проверяет размер, SHA-256 и манифест, запус
 В старых версиях проверка обновлений может упираться в лимит GitHub API.
 Один раз установите актуальное обновление вручную:
 
-1. Скачайте [Tonight-update-1.11.4.zip](https://github.com/vewi001/tonight/releases/download/v1.11.4/Tonight-update-1.11.4.zip); ZIP распаковывать не нужно.
+1. Скачайте [Tonight-update-1.13.0.zip](https://github.com/vewi001/tonight/releases/download/v1.13.0/Tonight-update-1.13.0.zip); ZIP распаковывать не нужно.
 2. Нажмите «Остановить Tonight» в маленьком окне приложения.
 3. Запустите `Обновить Tonight.exe` из своей папки Tonight, нажмите
    «Обновить из файла…» и выберите скачанный ZIP.
