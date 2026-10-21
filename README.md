@@ -20,6 +20,7 @@ Tonight — бесплатный локальный помощник выбор�
 Отдельный режим комнат удалён; совместный подбор, профили и подключение телефона сохранены.
 
 [**Скачать Tonight для Windows**](https://github.com/vewi001/tonight/releases/download/v1.13.1/Tonight-portable-1.13.1.zip)
+· [Зеркало на Яндекс Диске](https://disk.yandex.ru/d/fA042rBy8NJ1aA/v1.13.1)
 · [Что нового в 1.13.1](https://github.com/vewi001/tonight/releases/tag/v1.13.1)
 · [Обновить установленную версию](https://github.com/vewi001/tonight/releases/download/v1.13.1/Tonight-update-1.13.1.zip)
 
