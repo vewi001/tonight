@@ -268,6 +268,7 @@ def initialize(path: Path | None = None) -> None:
         if "franchise_order" not in movie_columns:
             db.execute("ALTER TABLE movies ADD COLUMN franchise_order INTEGER")
         session_columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)").fetchall()}
+        # Keep the legacy room payload intact; archived rooms are excluded from active evenings.
         if "match_data" not in session_columns:
             db.execute("ALTER TABLE sessions ADD COLUMN match_data TEXT NOT NULL DEFAULT '{}'")
         if "access_code" not in session_columns:

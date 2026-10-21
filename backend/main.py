@@ -21,7 +21,6 @@ import qrcode
 import qrcode.image.svg
 
 from backend.api.realtime import manager
-from backend.sessions import movie_match as match_service
 from backend.backups import MAX_IMPORTED_BACKUP_BYTES, create_backup, import_backup, list_backups, restore_backup
 from backend.catalog_bundle import bootstrap_catalog
 from backend.catalog_manager import CatalogUpdateManager
@@ -149,11 +148,6 @@ async def invalidate_personal_recommendations(request: Request, call_next):
 
 
 async def publish_state(session_id: int, event: str = "state") -> None:
-    with db_session() as db:
-        row = db.execute('SELECT match_data FROM sessions WHERE id=?', (session_id,)).fetchone()
-    if row and row['match_data'] != '{}':
-        await manager.broadcast(session_id, {'type': 'match_changed'})
-        return
     await manager.broadcast(session_id, {"type": event, "session": session_state(session_id)})
 
 
@@ -436,18 +430,15 @@ def _is_public_remote_api(request: Request) -> bool:
 @app.middleware("http")
 async def require_evening_code_for_remote_api(request: Request, call_next):
     path = request.url.path
-    # Match invitations never grant a guest the old profile/code privileges.
-    # Guard the old mutation/read routes even on loopback and for a known code.
+    # Compatibility only: retired clients cannot create or mutate rooms.
+    if path.startswith('/api/movie-match/') or (path.startswith('/api/sessions/') and '/match' in path) or (path == '/api/sessions/new' and request.query_params.get('movie_match') == 'true'):
+        return JSONResponse({'detail': 'Выбор по ссылке больше недоступен. Откройте главную Tonight и выберите «По знакомым фильмам».', 'redirect': '/'}, status_code=410)
     parts = path.split('/')
     if len(parts) > 3 and parts[2] == 'sessions' and parts[3].isdigit():
         with db_session() as db:
-            room = db.execute("SELECT match_data FROM sessions WHERE id=?", (int(parts[3]),)).fetchone()
-        if room and room['match_data'] != '{}':
-            if len(parts) > 4 and parts[4] == 'match':
-                return await call_next(request)
-            return JSONResponse({'detail': 'Откройте экран Movie Match для этой комнаты.'}, status_code=403)
-    if path == '/api/movie-match/join' or (path == '/api/sessions/new' and request.query_params.get('movie_match') == 'true'):
-        return await call_next(request)
+            archived = db.execute("SELECT match_data FROM sessions WHERE id=?", (int(parts[3]),)).fetchone()
+        if archived and archived['match_data'] != '{}':
+            return JSONResponse({'detail': 'Этот старый подбор завершён. Начните новый на главной Tonight.', 'redirect': '/'}, status_code=410)
     if not path.startswith("/api/") or _is_loopback(request.client.host if request.client else None) or _is_public_remote_api(request):
         return await call_next(request)
     session_id = None
@@ -496,14 +487,9 @@ async def get_active_session(request: Request) -> dict:
 
 
 @app.post("/api/sessions/new")
-async def new_session(request: Request, movie_match: bool = False, profile: str | None = None) -> dict:
+async def new_session() -> dict:
     from datetime import date
     from backend.sessions.service import _title
-    if movie_match:
-        try:
-            match_service.credential(request.headers.get('X-Match-Token'))
-        except match_service.MatchError as exc:
-            raise HTTPException(exc.status, str(exc)) from exc
     now = datetime.now().isoformat(timespec="seconds")
     with db_session() as db:
         cur = db.execute(
@@ -511,73 +497,8 @@ async def new_session(request: Request, movie_match: bool = False, profile: str 
             (date.today().isoformat(), _title(date.today()), "choosing", generate_access_code(), now, now),
         )
         session_id = cur.lastrowid
-        if movie_match:
-            token = request.headers.get('X-Match-Token')
-            owner_profile = profile if _is_loopback(request.client.host if request.client else None) else None
-            match_service.initialize_room(session_id, token, owner_profile, db=db)
-    if movie_match:
-        return _match_response(match_service.snapshot(session_id, token), token)
     return session_state(session_id)
 
-
-def _match_response(snapshot: dict, token: str) -> JSONResponse:
-    response = JSONResponse(snapshot, headers={'Cache-Control': 'no-store'})
-    response.set_cookie(f'match_{snapshot["id"]}', token, httponly=True, samesite='strict', max_age=86400, path=f'/ws/session/{snapshot["id"]}/')
-    return response
-
-
-class MatchJoinIn(BaseModel):
-    room: str = Field(min_length=20, max_length=80, pattern=r'^[A-Za-z0-9_-]+$')
-
-
-@app.get('/api/sessions/{session_id}/match/qr')
-async def match_qr(session_id: int, room: str, request: Request):
-    try:
-        with db_session() as db:
-            data = match_service.read(db, session_id)
-        if not secrets.compare_digest(room, data['room']):
-            raise match_service.MatchError('Приглашение недействительно', 404)
-        match_service.available(data)
-    except match_service.MatchError as exc:
-        raise HTTPException(exc.status, str(exc)) from exc
-    port = request.url.port or (443 if request.url.scheme == 'https' else 80)
-    url = f'{request.url.scheme}://{lan_ip()}:{port}/?join=1&room={data["room"]}'
-    image = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage)
-    stream = io.BytesIO()
-    image.save(stream)
-    return Response(stream.getvalue(), media_type='image/svg+xml', headers={'Cache-Control': 'no-store'})
-
-
-@app.post('/api/movie-match/join')
-async def match_join(payload: MatchJoinIn, request: Request):
-    token = request.headers.get('X-Match-Token')
-    try:
-        current = await asyncio.to_thread(match_service.join, payload.room, token)
-    except match_service.MatchError as exc:
-        raise HTTPException(exc.status, str(exc)) from exc
-    await manager.broadcast(current['id'], {'type': 'match_changed'})
-    return _match_response(current, token)
-
-
-@app.get('/api/sessions/{session_id}/match')
-async def match_state(session_id: int, request: Request):
-    token = request.headers.get('X-Match-Token')
-    try:
-        current = await asyncio.to_thread(match_service.snapshot, session_id, token)
-    except match_service.MatchError as exc:
-        raise HTTPException(exc.status, str(exc)) from exc
-    return _match_response(current, token)
-
-
-@app.post('/api/sessions/{session_id}/match')
-async def match_action(session_id: int, payload: match_service.Action, request: Request):
-    token = request.headers.get('X-Match-Token')
-    try:
-        current = await asyncio.to_thread(match_service.act, session_id, token, payload)
-    except match_service.MatchError as exc:
-        raise HTTPException(exc.status, str(exc)) from exc
-    await manager.broadcast(session_id, {'type': 'match_changed'})
-    return _match_response(current, token)
 
 
 @app.post("/api/sessions/{session_id}/restart")
@@ -597,7 +518,7 @@ async def restart_session(session_id: int) -> dict:
         ).rowcount
         if not changed:
             replacement = db.execute(
-                "SELECT id FROM sessions WHERE session_date=? AND status != 'abandoned' ORDER BY id DESC LIMIT 1",
+                "SELECT id FROM sessions WHERE match_data='{}' AND session_date=? AND status != 'abandoned' ORDER BY id DESC LIMIT 1",
                 (date.today().isoformat(),),
             ).fetchone()
             if replacement:
@@ -1268,20 +1189,10 @@ async def websocket_session(websocket: WebSocket, session_id: int, user_id: str,
         return
     with db_session() as db:
         room = db.execute('SELECT match_data FROM sessions WHERE id=?', (session_id,)).fetchone()
-    is_match = bool(room and room['match_data'] != '{}')
-    if is_match:
-        try:
-            data = loads(room['match_data'], {})
-            who = match_service.member(data, websocket.cookies.get(f'match_{session_id}'))
-            if user_id != ('lera', 'nikita')[who]:
-                raise match_service.MatchError('Неверный участник', 403)
-            origin = websocket.headers.get('origin')
-            if origin and origin != str(websocket.url).split('/ws/')[0].replace('ws:', 'http:').replace('wss:', 'https:'):
-                raise match_service.MatchError('Неверный источник', 403)
-        except match_service.MatchError:
-            await websocket.close(code=1008)
-            return
-    elif not _is_loopback(websocket.client.host if websocket.client else None):
+    if room and room['match_data'] != '{}':
+        await websocket.close(code=1008)
+        return
+    if not _is_loopback(websocket.client.host if websocket.client else None):
         if not secrets.compare_digest(code or "", session_access_code(session_id)):
             await websocket.close(code=1008)
             return

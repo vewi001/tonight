@@ -185,7 +185,7 @@ function render() {
     return;
   }
   const views = {
-    match: movieMatch.content, choices: renderChoices, 'match-start': renderMatchStart, 'taste-start': renderTasteStart,
+    choices: renderChoices,
     setup: renderSetup, home: renderHome, tonight: renderTonight, roulette: renderRoulette, tinder: renderTinder, vibe: renderVibe, filters: renderFilters,
     swipe: renderSwipe, waiting: renderWaiting, results: renderResults, quick: renderQuick,
     selected: renderSelected, watching:renderWatching, feedback: renderFeedback, eveningFeedback: renderEveningFeedback, history: renderHistory, weekly: renderWeekly, franchises: renderFranchises, diagnostics: renderDiagnostics,
@@ -194,7 +194,6 @@ function render() {
   root.innerHTML = (views[state.view] || renderHome)();
   root.querySelectorAll('details').forEach(el=>{if(openDisclosures.has(el.dataset.disclosureKey || el.dataset.descriptionKey || el.querySelector('summary')?.textContent))el.open=true;});
   bindCommon();
-  movieMatch.bind();
   bindExclusions();
   if (state.view === 'swipe') bindSwipeGestures();
   if (state.view === 'waiting') scheduleWaitingCheck();
@@ -210,7 +209,7 @@ function renderSetup() {
   const o = state.setup?.ollama || {};
   return shell(`<section class="panel" style="margin-top:8vh">
     <p class="eyebrow">Первый запуск</p><h2>Добро пожаловать в Tonight 🍿</h2>
-    <p class="lede">Выберите фильм себе или вместе. Настроение, время и ваши оценки помогут сузить выбор.</p>
+    <p class="lede">Оцените впечатления от знакомых фильмов. Tonight учтёт ваши ответы при подборе для двоих.</p>
     <div class="setup-list">
       <div class="setup-row"><span>Каталог готов</span><strong class="ok">✓ ${state.setup?.catalog || 0} фильмов</strong></div>
       <div class="setup-row"><span>Постеры загружены</span><strong class="${state.setup?.posters ? 'ok':'warn'}">${state.setup?.posters ? `✓ ${state.setup.posters}`:'○ Постеры пока не загружены'}</strong></div>
@@ -307,20 +306,19 @@ function homeCinema() {
   return `<div class="home-cinema"><p class="cinema-label">В вашем каталоге <span aria-hidden="true">✦</span></p><div class="cinema-posters">${films.length?films.map(m=>`<button class="cinema-poster" data-home-detail="${esc(m.id)}" aria-label="Подробнее: ${esc(m.title)}">${poster(m)}<span>${esc(m.title)}</span></button>`).join(''):'<div class="cinema-placeholder" aria-hidden="true"><span>TONIGHT</span><small>Меньше выбирать. Больше смотреть.</small></div>'}</div></div>`;
 }
 
+function homeHero() {
+  return `<section class="home-choice" aria-labelledby="home-choice-title"><div class="home-choice-copy"><p class="eyebrow">Ваш вечер начинается здесь</p><h1 id="home-choice-title">Что посмотрим <span>сегодня?</span></h1><p class="lede">Отметьте, какие из просмотренных фильмов вам понравились. Tonight учтёт оценки каждого зрителя при подборе для двоих.</p><div class="footer-actions"><button class="button large" data-choice-mode="taste">По знакомым фильмам <span aria-hidden="true">↗</span></button><button class="button ghost" data-view="choices">Все способы выбора <span aria-hidden="true">→</span></button></div></div>${homeCinema()}</section>`;
+}
+
+function legacyInviteNotice() {
+  return state.legacyInvite ? '<aside class="choice-resume" role="status"><div><strong>Выбор по старой ссылке больше недоступен</strong><p>Начните подбор по знакомым фильмам. Чтобы подключить телефон, используйте адрес и код с экрана Tonight.</p></div></aside>' : '';
+}
+
 function renderHome() {
   if (!state.user) {
     const accessCode = isRemoteClient() ? `<div class="panel" style="margin-bottom:1rem"><label for="access-code"><strong>Код с экрана Tonight</strong></label><input id="access-code" data-access-code inputmode="numeric" autocomplete="one-time-code" maxlength="6" value="${esc(state.accessCode)}" placeholder="6 цифр"><p class="hint">Введите код с экрана компьютера, затем выберите себя.</p></div>` : '';
-    return shell(`<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">Ваш следующий киновечер</p><h1>Tonight <em>🍿</em></h1><p class="lede">Найдите фильм себе или вместе.</p></div>
-      ${accessCode}
-      <h2>${state.pendingChoice ? "Кто будет выбирать?" : "Кто сегодня смотрит?"}</h2><p class="hint">${state.pendingChoice ? "Выберите профиль — затем откроем выбранный способ подбора." : "Профиль хранит ваш вкус и историю. Для просмотра одному достаточно одного профиля."}</p>
-      <div class="people-grid">
-        <button class="person-card" data-user="lera" style="--glow:#ff667c"><span class="person-emoji">🍿</span><span class="person-name">Первый зритель</span></button>
-        <button class="person-card" data-user="nikita" style="--glow:#ff9a59"><span class="person-emoji">🎬</span><span class="person-name">Второй зритель</span></button>
-      </div>
-      <div class="guest-choice"><button class="button secondary" data-view="match-start">Выбрать вдвоём без профиля</button><button class="button ghost" data-view="choices">Все способы выбора</button></div>
-
-      <details class="disclosure"><summary>Подключить телефон</summary>${inviteCard()}</details>
-    </section>`, {nav:false});
+    const profilePicker = `<section class="hero-home"><div class="hero-lockup"><p class="eyebrow">Продолжим подбор</p><h1>Кто будет выбирать?</h1><p class="lede">Выберите профиль — подбор продолжится автоматически. Ответы каждого зрителя сохраняются отдельно.</p></div>${accessCode}<div class="people-grid"><button class="person-card" data-user="lera" style="--glow:#ff667c"><span class="person-emoji">🍿</span><span class="person-name">Первый зритель</span></button><button class="person-card" data-user="nikita" style="--glow:#ff9a59"><span class="person-emoji">🎬</span><span class="person-name">Второй зритель</span></button></div><button class="button ghost" data-view="home">← На главную</button></section>`;
+    return shell(`${legacyInviteNotice()}${state.pendingChoice ? profilePicker : homeHero()}<details class="disclosure"><summary>Подключить телефон</summary>${inviteCard()}</details>`, {nav:false});
   }
   const s = state.session;
   let title = 'Начнём киновечер?';
@@ -333,10 +331,9 @@ function renderHome() {
   else if (s?.participants?.[state.user]?.energy) { title = 'Продолжим с того же места?'; cta = 'Продолжить выбор'; }
   const active=s && !['choosing','completed'].includes(s.status) || s?.participants?.[state.user]?.energy;
   const job=state.expansion;
-  return shell(`<section class="home-choice" aria-labelledby="home-choice-title"><div class="home-choice-copy"><p class="eyebrow">Ваш вечер начинается здесь</p><h1 id="home-choice-title">Что посмотрим <span>сегодня?</span></h1><p class="lede">Выберите настроение и время. Tonight предложит фильмы для вашего вечера.</p><div class="footer-actions"><button class="button large" data-choice-mode="tonight">Подобрать на вечер <span aria-hidden="true">↗</span></button><button class="button ghost" data-view="choices">Все способы выбора <span aria-hidden="true">→</span></button></div></div>${homeCinema()}</section>
+  return shell(`${legacyInviteNotice()}${homeHero()}
     <div class="home-tools"><div class="home-resumes">
     ${active ? `<aside class="choice-resume"><div><strong>${esc(title)}</strong><p>Ваш вечер сохранён — можно продолжить.</p></div><button class="button secondary" data-action="continue-session">${esc(cta)}</button></aside>` : ''}
-    ${movieMatch.hasSession?.() ? '<aside class="choice-resume"><div><strong>Совместный выбор сохранён</strong><p>Вернитесь в комнату со своими ответами.</p></div><button class="button secondary" data-view="match-start">Продолжить вдвоём</button></aside>' : ''}
     </div>${temporaryExclusions()}</div>
     ${job && ['running','error'].includes(job.phase)?`<aside class="status-card" role="status"><p>${esc(job.message || 'Загрузка каталога')}</p><button class="button secondary" data-view="library">Открыть каталог</button></aside>`:''}
     ${personalSection()}<details class="disclosure"><summary>Подключить телефон и пригласить зрителя</summary>${inviteCard()}<div class="presence">${participantLine('lera')}${participantLine('nikita')}</div></details>`);
@@ -350,34 +347,24 @@ function choicesBack() {
 function renderChoices() {
   const card = (mode, icon, title, text, note) => `<button class="choice-method" data-choice-mode="${mode}"><span class="choice-method-icon" aria-hidden="true">${icon}</span><span class="choice-method-copy"><strong>${title}</strong><span>${text}</span><small>${note}</small></span><span class="choice-method-arrow" aria-hidden="true">↗</span></button>`;
   return shell(`<section class="choice-hub"><button class="button ghost choices-back" data-view="home">← На главную</button><div class="screen-head"><p class="eyebrow">Способы выбора</p><h1>Как найдём фильм?</h1><p class="lede">Выберите, что удобнее сейчас.</p></div><div class="choice-methods">
+    ${card('taste','✧','По знакомым фильмам','Оцените уже просмотренное вдвоём. Учтём вкус каждого.','Подбор для двоих')}
     ${card('tonight','☾','По настроению','Настройте настроение, время и компанию. Получите короткую подборку.','Подбор на вечер')}
     ${card('smart','⌕','По описанию','Расскажите своими словами, что хочется посмотреть.','Умный поиск')}
-    ${card('match','♡','Вдвоём по ссылке','Выбирайте каждый на своём устройстве. Найдём общие «хочу».','Movie Match · без профиля')}
     ${card('roulette','⚄','Случайный фильм','Задайте условия и доверьте выбор случаю.','Кинорулетка')}
     ${card('tinder','▱','Листать карточки','Отмечайте интересные фильмы по одному — подбор подстроится.','Кино-Tinder')}
-    ${card('taste','✧','По знакомым фильмам','Оцените уже просмотренное вдвоём. Учтём вкус каждого.','Подбор для двоих')}
   </div></section>`, {nav:!!state.user});
 }
 
-function renderMatchStart() {
-  return shell(`<section class="match-intro">${choicesBack()}<div class="screen-head"><p class="eyebrow">Movie Match</p><h1>Выбрать фильм вдвоём</h1><p class="lede">Найдите то, что хочется посмотреть обоим.</p></div><ol class="match-intro-steps"><li><strong>Пригласите второго зрителя</strong><p>Отправьте ссылку на комнату. Регистрация и профиль не нужны.</p></li><li><strong>Выбирайте независимо</strong><p>Каждый листает фильмы и отмечает «Хочу посмотреть».</p></li><li><strong>Решите вместе</strong><p>Увидите общие варианты и оба подтвердите фильм на вечер.</p></li></ol><div class="match-intro-action">${movieMatch.entry()}<p class="hint">Для подключения с телефона нужна одна Wi-Fi-сеть. Tonight на компьютере должен оставаться открытым.</p></div></section>`, {narrow:true,nav:!!state.user});
-}
-
-function renderTasteStart() {
-  return shell(`<section>${choicesBack()}<div class="screen-head"><p class="eyebrow">Подбор для двоих</p><h1>Начнём со знакомых фильмов</h1><p class="lede">Каждый задаёт своё настроение и оценивает уже просмотренные фильмы. Tonight учитывает вкус обоих и предлагает общую подборку.</p></div><div class="footer-actions"><button class="button" data-action="continue-session">Начать или продолжить подбор</button><button class="button secondary" data-view="quick">Выбрать готовый сценарий</button></div><p class="hint">«Устали» или «Поздно»: готовые условия для вашего вечера.</p></section>`, {narrow:true});
-}
-
-function openChoiceMode(mode) {
+async function openChoiceMode(mode) {
   ++state.navigationRequest;
   smartSearch.cancel();
-  if (mode==='match') { state.view='match-start'; render(); return; }
   if (!state.user) { state.pendingChoice=mode; state.view='home'; render(); return; }
   state.pendingChoice=null;
   if (mode==='tonight') openTonight();
   else if (mode==='smart') smartSearch.open();
   else if (mode==='roulette') openRoulette();
   else if (mode==='tinder') openTinder();
-  else if (mode==='taste') { state.view='taste-start'; render(); }
+  else if (mode==='taste') await continueSession();
 }
 
 function discoveryCard(movie, reason, action = 'select-personal') {
@@ -423,7 +410,7 @@ function renderVibe() {
     <div class="chip-grid">${moods.map(([id,emoji,label]) => `<button class="chip ${state.prefs.moods.includes(id)?'selected':''}" data-mood="${id}" aria-pressed="${state.prefs.moods.includes(id)}">${emoji} ${label}</button>`).join('')}</div>
     <h3 class="question">Сколько сегодня сил?</h3><div class="choice-stack">
       ${[['low','😴','Мозг выключен'],['medium','🙂','Что-нибудь нормальное'],['high','🧠','Готов внимательно смотреть']].map(([id,e,label]) => `<button class="choice ${state.prefs.energy===id?'selected':''}" data-energy="${id}"><span>${e} ${label}</span></button>`).join('')}
-    </div><div class="footer-actions"><button class="button large" data-action="to-filters" ${!state.prefs.moods.length || !state.prefs.energy?'disabled':''}>Дальше</button></div>
+    </div><div class="footer-actions"><button class="button ghost" data-view="quick">Готовые условия вечера</button><button class="button large" data-action="to-filters" ${!state.prefs.moods.length || !state.prefs.energy?'disabled':''}>Дальше</button></div>
   </section>`, {narrow:true});
 }
 
@@ -802,7 +789,7 @@ async function go(view) {
   const request = ++state.navigationRequest;
   const previousView = state.view;
   state.modal = null;
-  if (view === 'choices' || view === 'match-start') { state.pendingChoice=null; state.view=view; render(); return; }
+  if (view === 'choices') { state.pendingChoice=null; state.view=view; render(); return; }
   if (view === 'home') { state.pendingChoice=null; state.personalAt=0; state.view='home'; render(); return; }
   if (view === 'vibe') { state.view='vibe'; render(); return; }
   if (view === 'quick') { state.view='quick'; render(); return; }
@@ -838,7 +825,7 @@ async function selectUser(user) {
     connectWs();
     const pending=state.pendingChoice;
     state.view='home';
-    if(pending)openChoiceMode(pending);else render();
+    if(pending)await openChoiceMode(pending);else render();
   } catch (e) { state.user=null; localStorage.removeItem('tonight:user'); toast(e.message); render(); }
 }
 
@@ -1310,8 +1297,16 @@ async function openPendingFeedback() {
 }
 
 async function init({destination='home'}={}) {
-  if(!init.exclusionTimer)init.exclusionTimer=setInterval(()=>{if(state.user && state.view!=='match')refreshExclusions();},30000);
-  if(await movieMatch.resume({fromLinkOnly:true}))return;
+  if(!init.exclusionTimer)init.exclusionTimer=setInterval(()=>{if(state.user)refreshExclusions();},30000);
+  const oldLink = new URLSearchParams(location.search);
+  if (oldLink.has('room') || /^\/(?:movie-match|match)(?:\/|$)/.test(location.pathname || '')) {
+    state.legacyInvite = true;
+    destination = 'home';
+    const clean = new URL(location.href);
+    clean.pathname = '/'; clean.searchParams.delete('room'); clean.searchParams.delete('join'); clean.hash = '';
+    history.replaceState(null, '', clean);
+    localStorage.setItem('tonight:setup','1');
+  }
   state.view='loading'; render();
   try {
     [state.setup,state.session,state.invite]=await Promise.all([api('/api/setup/status'),api('/api/sessions/active'),api('/api/invite')]);
@@ -2040,6 +2035,5 @@ function createSmartSearch({state,root,api,render,esc,poster,tonightRating,tonig
 }
 
 
-const movieMatch=typeof createMovieMatch==='function'?createMovieMatch({state,root,render,shell,esc,poster,toast,onBrowse:()=>init({destination:'choices'})}):{entry:()=>'',bind:()=>{},content:()=>'',resume:async()=>false};
 const smartSearch=createSmartSearch({state,root,api,render,esc,poster,tonightRating,tonightSynopsis,toast});
 init();

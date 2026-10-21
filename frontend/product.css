@@ -21,6 +21,7 @@ p { line-height:1.65; }
 .hint,.action-help { text-align:left; line-height:1.6; }
 .panel,.history-card,.choice,.choice-method,.tonight-film,.smart-film,.tinder-card { background:var(--surface); box-shadow:none; border-color:var(--line); }
 .choice-method { border-radius:16px; }
+.choice-method[data-choice-mode="taste"] { grid-column:1/-1; }
 .choice-method-copy>span { max-width:38ch; }
 .home-choice { padding:24px 0; max-width:none; }
 .home-choice h1 { max-width:20ch; }
@@ -159,7 +160,8 @@ p { line-height:1.65; }
   .personal-grid .discovery-card>.footer-actions { gap:8px; }
   .personal-grid .discovery-card .button { font-size:.78rem; padding:10px 6px; }
   .choice-hub { max-width:none; }
-  .choice-methods { grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px; }
+  .choice-methods { grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
+  .choice-method[data-choice-mode="taste"] { grid-column:1/-1; min-height:140px; border-color:#ffad8355; background:linear-gradient(110deg,#2a202b,#17151c); }
   .choice-method { padding:26px; min-height:190px; }
   .choice-method-icon { background:#ffad8311; color:#ffc29e; }
   .tonight-mode { max-width:1240px; margin:auto; }
