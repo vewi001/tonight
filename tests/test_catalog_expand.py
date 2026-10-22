@@ -1,5 +1,8 @@
 import io
+import json
+import socket
 import sqlite3
+import ssl
 
 import httpx
 import pytest
@@ -127,6 +130,120 @@ def test_network_failure_preserves_catalog_and_retry_can_complete(tmp_path,monke
     assert manager.status()['phase']=='done' and manager.status()['added']==20
     with connect(database) as db:
         assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+
+
+@pytest.mark.parametrize('kind', [httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError])
+def test_temporary_transport_failure_retries_same_request_and_completes(tmp_path, monkeypatch, kind):
+    requests = []
+    def handler(request):
+        requests.append(str(request.url))
+        if len(requests) == 1:
+            raise kind('temporary failure')
+        return provider(request)
+    manager, database = expansion(tmp_path, handler)
+    monkeypatch.setattr(manager.cancelled, 'wait', lambda _:False)
+    manager.reserve(20)
+    manager.run()
+    assert requests[0] == requests[1]
+    assert manager.status()['phase'] == 'done'
+    assert manager.status()['added'] == 20
+    with connect(database) as db:
+        assert db.execute('SELECT COUNT(*) FROM movies').fetchone()[0] == 20
+
+
+def test_interrupted_response_body_retries_from_start(tmp_path, monkeypatch):
+    class Interrupted(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'{"results":['
+            raise httpx.ReadError('connection reset')
+    calls = []
+    def handler(request):
+        calls.append(request.url.path)
+        if len(calls) == 1:
+            return httpx.Response(200, stream=Interrupted())
+        return provider(request)
+    manager, _ = expansion(tmp_path, handler)
+    monkeypatch.setattr(manager.cancelled, 'wait', lambda _:False)
+    manager.reserve(20)
+    manager.run()
+    assert calls[0] == calls[1]
+    assert manager.status()['phase'] == 'done'
+    assert manager.status()['added'] == 20
+
+
+@pytest.mark.parametrize('kind, code', [
+    ('timeout', 'timeout'), ('dns', 'dns'), ('certificate', 'certificate'),
+    ('connection', 'connection'), ('invalid_response', 'invalid_response'),
+])
+def test_failure_identifies_cause_without_exposing_credentials(tmp_path, monkeypatch, kind, code):
+    calls = []
+    sensitive = 'app-test-token https://private.invalid/?api_key=secret'
+    def handler(request):
+        calls.append(request.url.path)
+        if kind == 'timeout':
+            raise httpx.ReadTimeout(sensitive)
+        if kind == 'dns':
+            raise httpx.ConnectError(sensitive) from socket.gaierror(11001, sensitive)
+        if kind == 'certificate':
+            raise httpx.ConnectError(sensitive) from ssl.SSLCertVerificationError(1, sensitive)
+        if kind == 'invalid_response':
+            return httpx.Response(200, text='<html>'+sensitive+'</html>')
+        raise httpx.ConnectError(sensitive)
+    manager, _ = expansion(tmp_path, handler)
+    monkeypatch.setattr(manager.cancelled, 'wait', lambda _:False)
+    manager.reserve(20)
+    manager.run()
+    state = manager.status()
+    assert state['phase'] == 'error' and state['error_code'] == code
+    assert len(calls) == (1 if kind in {'certificate', 'invalid_response'} else 3)
+    text = (tmp_path/'data/logs/tmdb-download.log').read_text(encoding='utf-8')
+    record = json.loads(text)
+    assert record['code'] == code
+    assert record['added'] == 0
+    assert 'app-test-token' not in text+str(state)
+    assert 'private.invalid' not in text+str(state)
+    assert 'secret' not in text+str(state)
+    with acquire_update_lease(tmp_path):pass
+
+
+def test_cancel_during_retry_stops_without_another_request(tmp_path, monkeypatch):
+    calls = []
+    def handler(request):
+        calls.append(request.url.path)
+        raise httpx.ConnectError('temporary interruption')
+    manager, _ = expansion(tmp_path, handler)
+    def cancel_while_waiting(_):
+        manager.cancel()
+        return True
+    monkeypatch.setattr(manager.cancelled, 'wait', cancel_while_waiting)
+    manager.reserve(20)
+    manager.run()
+    assert manager.status()['phase'] == 'cancelled'
+    assert len(calls) == 1
+    assert not (tmp_path/'data/logs/tmdb-download.log').exists()
+    with acquire_update_lease(tmp_path):pass
+
+
+def test_backup_write_failure_is_reported_as_storage(tmp_path, monkeypatch):
+    import backend.movies.catalog_expand as module
+    manager, _ = expansion(tmp_path)
+    def denied(*args, **kwargs):
+        raise PermissionError('unwritable backup')
+    monkeypatch.setattr(module, 'create_backup', denied)
+    manager.reserve(20)
+    manager.run()
+    assert manager.status()['phase'] == 'error'
+    assert manager.status()['error_code'] == 'storage'
+    assert 'резервную копию' in manager.status()['message']
+
+
+def test_tmdb_client_keeps_certificate_and_hostname_verification():
+    from backend.movies.catalog_expand import tmdb_client
+    with tmdb_client() as client:
+        context = client._transport._pool._ssl_context
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+        assert context.cert_store_stats()['x509_ca'] > 0
 
 
 def test_phone_needs_evening_code_but_can_start_and_observe_same_job(tmp_path,monkeypatch):
