@@ -37,7 +37,7 @@ def prepare(output, files):
     (output / 'SHA256SUMS.txt').write_text('\n'.join(sums) + '\n', encoding='utf-8')
     (output / 'README.txt').write_text(
         'Загрузите эту папку целиком на Яндекс Диск, сохранив вложенные папки.\n'
-        'Откройте доступ по ссылке к самой папке Tonight-mirror и отправьте ссылку в чат.\n'
+        'Откройте доступ по ссылке к самой папке Tonight-mirror и укажите её адрес в app/mirror.json.\n'
         'Архивы распаковывать или переименовывать не нужно.\n', encoding='utf-8')
     return output
 

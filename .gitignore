@@ -16,8 +16,21 @@ app-tmdb.json
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 *.log
+
+# Local editor settings and temporary files.
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*.tmp
+*~
 
 # Personal Tonight data. `data/art` contains original fallback art needed by
 # the application and is intentionally kept in source control.
