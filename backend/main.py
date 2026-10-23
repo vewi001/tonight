@@ -158,8 +158,9 @@ async def _refine_recommendations_in_background(
     """AI may improve wording/order, but it must never delay the result screen."""
     try:
         enriched = await rerank(candidates, {"participants": participants})
-        if enriched != candidates:
-            store_recommendations(session_id, enriched)
+        if enriched != candidates and store_recommendations(
+            session_id, enriched, expected_ids={movie['id'] for movie in candidates},
+        ):
             await publish_state(session_id, "recommendations_refined")
     except Exception:
         # The deterministic result was already saved. Optional AI must stay optional.

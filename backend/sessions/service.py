@@ -8,7 +8,7 @@ from backend.config import settings
 from backend.database.db import connect, db_session, dumps, generate_access_code, loads
 from backend.movies.catalog import get_movie, is_released, row_to_movie, swipe_deck
 from backend.movies.genres import normalize_genres
-from backend.recommendation.engine import MOOD_GENRES
+from backend.recommendation.engine import MOOD_GENRES, recommend
 from backend.recommendation.exclusions import filter_for_users
 
 RU_MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
@@ -163,17 +163,40 @@ def both_ready(session_id: int) -> bool:
     return state.get("lera", False) and state.get("nikita", False)
 
 
-def store_recommendations(session_id: int, recommendations: list[dict[str, Any]]) -> None:
+def store_recommendations(
+    session_id: int, recommendations: list[dict[str, Any]], *, expected_ids: set[str] | None = None,
+) -> bool:
     with db_session() as db:
+        if expected_ids is not None:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT recommendations FROM sessions WHERE id=?', (session_id,)).fetchone()
+            if not row or {m['id'] for m in loads(row['recommendations'], [])} != expected_ids:
+                return False
         db.execute(
             """UPDATE sessions SET recommendations=?,
             status=CASE WHEN status IN ('choosing','recommended') THEN 'recommended' ELSE status END,
             updated_at=? WHERE id=?""",
             (dumps(recommendations), datetime.now().isoformat(timespec="seconds"), session_id),
         )
+    return True
+
+
+def refill_recommendations(session_id: int) -> None:
+    """A finished seven-film batch is not the end of the eligible catalog."""
+    state = session_state(session_id)
+    if state['status'] == 'recommended' and not state['recommendations'] and both_ready(session_id):
+        store_recommendations(session_id, recommend(session_id, settings.candidate_count))
 
 
 def choose_movie(session_id: int, exclude_current: bool = False) -> dict[str, Any]:
+    if exclude_current:
+        state = session_state(session_id)
+        if state['status'] == 'watching':
+            raise ValueError('Сначала завершите текущий просмотр')
+        if state['selected']:
+            # Commit the rejection even when the whole catalog is exhausted.
+            decline_selected_movie(session_id)
+    refill_recommendations(session_id)
     with db_session() as db:
         session = db.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not session:
@@ -181,8 +204,6 @@ def choose_movie(session_id: int, exclude_current: bool = False) -> dict[str, An
         rejected = loads(session["rejected_movies"], [])
         if session['status'] == 'watching':
             raise ValueError('Сначала завершите текущий просмотр')
-        if exclude_current and session["selected_movie_id"] and session["selected_movie_id"] not in rejected:
-            rejected.append(session["selected_movie_id"])
         candidates = []
         for item in loads(session["recommendations"], []):
             if item["id"] in rejected:
@@ -192,7 +213,7 @@ def choose_movie(session_id: int, exclude_current: bool = False) -> dict[str, An
                 candidates.append({**item,**current})
         candidates = filter_for_users(db, candidates, session_id=session_id)
         if not candidates:
-            raise ValueError("no candidates left")
+            raise ValueError('Подходящие варианты закончились. Измените условия вечера.')
         top = candidates[: min(4, len(candidates))]
         weights = [max(1, int(item["match"] - 45)) ** 2 for item in top]
         selected = random.choices(top, weights=weights, k=1)[0]
@@ -302,9 +323,11 @@ def confirm_watched(session_id: int) -> dict[str, Any]:
 def decline_selected_movie(session_id: int) -> None:
     """Keep a declined option out of history and return to the short-list."""
     with db_session() as db:
-        session = db.execute("SELECT selected_movie_id,rejected_movies FROM sessions WHERE id=?", (session_id,)).fetchone()
+        session = db.execute("SELECT selected_movie_id,rejected_movies,status FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not session or not session["selected_movie_id"]:
             raise ValueError("movie not selected")
+        if session['status'] == 'watching':
+            raise ValueError('Сначала завершите текущий просмотр')
         rejected = loads(session["rejected_movies"], [])
         if session["selected_movie_id"] not in rejected:
             rejected.append(session["selected_movie_id"])
@@ -312,6 +335,7 @@ def decline_selected_movie(session_id: int) -> None:
             "UPDATE sessions SET selected_movie_id=NULL,rejected_movies=?,status='recommended',selected_at=NULL,updated_at=? WHERE id=?",
             (dumps(rejected), datetime.now().isoformat(timespec="seconds"), session_id),
         )
+    refill_recommendations(session_id)
 
 
 def record_connection_restored(session_id: int) -> int:

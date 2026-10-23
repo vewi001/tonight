@@ -460,7 +460,8 @@ function descriptionDisclosure(description, movieId, className = 'movie-descript
 }
 
 function renderNoAvailableMovies() {
-  return shell(`<section class="empty"><h2>Пока нет фильмов для выбора</h2><p>Сочетание исключений и условий вечера не оставило доступных фильмов. Нужны подтверждённый прокат и русское название; неизвестные обязательные характеристики исключаем.</p><p class="hint">Проверьте обновление каталога на основном компьютере или измените ограничения вечера.</p>${exclusionEmptyHelp()}<div class="footer-actions"><button class="button secondary" data-view="filters">Изменить условия вечера</button><button class="button ghost" data-view="taste">Изменить постоянные исключения</button><button class="button ghost" data-view="home">На главный экран</button></div></section>`);
+  const canRetry = state.session?.status === 'recommended' && state.session?.participants?.lera?.ready && state.session?.participants?.nikita?.ready;
+  return shell(`<section class="empty"><h2>Подходящие варианты закончились</h2><p>С учётом отклонённых фильмов, исключений и условий вечера подходящих вариантов не осталось. Нужны подтверждённый прокат и русское название; неизвестные обязательные характеристики исключаем.</p><p class="hint">Измените ограничения вечера или проверьте обновление каталога на основном компьютере.</p>${state.waitError?`<p class="hint" role="alert">${esc(state.waitError)}</p>`:''}${exclusionEmptyHelp()}<div class="footer-actions">${canRetry?`<button class="button" data-action="retry-recommendations" ${state.recovering?'disabled':''}>${state.recovering?'Ищем другие варианты…':'Повторить подбор'}</button>`:''}<button class="button secondary" data-view="filters">Изменить условия вечера</button><button class="button ghost" data-view="taste">Изменить постоянные исключения</button><button class="button ghost" data-view="home">На главный экран</button></div></section>`);
 }
 
 function movieDescription(description, movieId = '') {
@@ -848,7 +849,10 @@ async function continueSession() {
     }
     if (state.session.status === 'watching') state.view='watching';
     else if (state.session.status === 'selected') state.view='selected';
-    else if (state.session.status === 'recommended') state.view='results';
+    else if (state.session.status === 'recommended') {
+      if (!state.session.recommendations?.length) { await recoverRecommendations(); return; }
+      state.view='results';
+    }
     else if (state.session.participants[state.user]?.ready) state.view='waiting';
     else if (state.session.participants[state.user]?.energy) await loadDeck();
     else state.view='vibe';
@@ -977,7 +981,14 @@ async function acceptMainRecommendation(movieId) {
 async function chooseAnother() {
   if(state.session?.viewing_company==='solo' && state.tonight?.user===state.user){openTonight();await fetchTonight(true);return;}
   try { const movie=await api(`/api/sessions/${state.session.id}/choose-another`,{method:'POST'}); state.session.selected=movie; render(); toast('Другой вариант — без повторов'); }
-  catch(e){toast('Хорошие варианты закончились — начните новый вечер');}
+  catch(e){
+    try {
+      state.session=await api(`/api/sessions/${state.session.id}`);
+      if(state.session.status==='recommended')state.view='results';
+      render();
+    } catch (_) {}
+    toast(e.message);
+  }
 }
 
 async function startWatching() {
