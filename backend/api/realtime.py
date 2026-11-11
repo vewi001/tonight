@@ -32,12 +32,13 @@ class ConnectionManager:
     async def broadcast(self, session_id: int, payload: dict) -> None:
         payload = {**payload, "presence": self.presence(session_id)}
         dead: list[tuple[str, WebSocket]] = []
-        for user, sockets in self.connections.get(session_id, {}).items():
-            for socket in list(sockets):
-                try:
-                    await socket.send_json(payload)
-                except Exception:
-                    dead.append((user, socket))
+        recipients = [(user, socket) for user, sockets in list(self.connections.get(session_id, {}).items())
+                      for socket in list(sockets)]
+        for user, socket in recipients:
+            try:
+                await socket.send_json(payload)
+            except Exception:
+                dead.append((user, socket))
         for user, socket in dead:
             self.disconnect(session_id, user, socket)
 

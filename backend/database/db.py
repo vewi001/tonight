@@ -268,6 +268,18 @@ def initialize(path: Path | None = None) -> None:
         if "franchise_order" not in movie_columns:
             db.execute("ALTER TABLE movies ADD COLUMN franchise_order INTEGER")
         session_columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)").fetchall()}
+        if 'revision' not in session_columns:
+            db.execute('ALTER TABLE sessions ADD COLUMN revision INTEGER NOT NULL DEFAULT 0')
+        if 'replacement_session_id' not in session_columns:
+            db.execute('ALTER TABLE sessions ADD COLUMN replacement_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL')
+        db.execute('''CREATE TRIGGER IF NOT EXISTS session_revision AFTER UPDATE ON sessions
+            WHEN NEW.revision=OLD.revision BEGIN
+            UPDATE sessions SET revision=revision+1 WHERE id=NEW.id; END''')
+        for operation in ('INSERT', 'UPDATE', 'DELETE'):
+            reference = 'OLD' if operation == 'DELETE' else 'NEW'
+            db.execute(f'''CREATE TRIGGER IF NOT EXISTS participant_revision_{operation.lower()}
+                AFTER {operation} ON participants BEGIN
+                UPDATE sessions SET revision=revision+1 WHERE id={reference}.session_id; END''')
         # Keep the legacy room payload intact; archived rooms are excluded from active evenings.
         if "match_data" not in session_columns:
             db.execute("ALTER TABLE sessions ADD COLUMN match_data TEXT NOT NULL DEFAULT '{}'")

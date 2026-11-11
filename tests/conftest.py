@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 os.environ["TONIGHT_DB"] = "work/test-tonight.db"
 os.environ["OLLAMA_TIMEOUT"] = "0.05"
@@ -14,11 +13,11 @@ from backend.movies.seed import seed_movies
 
 
 @pytest.fixture(autouse=True)
-def clean_database():
-    path = settings.db_path
-    for suffix in ("", "-wal", "-shm"):
-        target = Path(str(path) + suffix)
-        if target.exists(): target.unlink()
+def clean_database(tmp_path_factory):
+    # Never unlink/reuse an SQLite WAL database still held by a previous test
+    # client or Windows filesystem scanner. Every scenario owns its own file.
+    previous = settings.db_path
+    object.__setattr__(settings, 'db_path', tmp_path_factory.mktemp('database') / 'tonight.db')
     initialize()
     seed_movies()
     # Synthetic proof for the seed fixtures used by unrelated evening tests.
@@ -28,9 +27,7 @@ def clean_database():
                    theatrical_release_date=printf('%04d-01-01',year),theatrical_release_type=3,
                    theatrical_release_country='US' ''')
     yield
-    for suffix in ("", "-wal", "-shm"):
-        target = Path(str(path) + suffix)
-        if target.exists(): target.unlink()
+    object.__setattr__(settings, 'db_path', previous)
 
 
 @pytest.fixture(autouse=True)

@@ -20,24 +20,26 @@ def _rule(row: Any) -> dict[str, Any]:
     }
 
 
-def add_avoidance(user_id: str, movie_id: str) -> dict[str, Any]:
+def add_avoidance(user_id: str, movie_id: str, db=None) -> dict[str, Any]:
+    if db is None:
+        with db_session() as connection:
+            return add_avoidance(user_id, movie_id, connection)
     movie = get_movie(movie_id)
     if not movie:
         raise ValueError("movie not found")
     now = datetime.now().isoformat(timespec="seconds")
-    with db_session() as db:
-        db.execute(
-            """INSERT INTO avoid_similar(user_id,movie_id,genres,keywords,franchise_key,created_at)
-            VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,movie_id) DO UPDATE SET
-            genres=excluded.genres,keywords=excluded.keywords,
-            franchise_key=excluded.franchise_key,created_at=excluded.created_at""",
-            (user_id, movie_id, dumps(movie["genres"]), dumps(movie["keywords"]), movie.get("franchise_key"), now),
-        )
-        row = db.execute(
-            """SELECT a.*,m.title FROM avoid_similar a JOIN movies m ON m.id=a.movie_id
-            WHERE a.user_id=? AND a.movie_id=?""",
-            (user_id, movie_id),
-        ).fetchone()
+    db.execute(
+        """INSERT INTO avoid_similar(user_id,movie_id,genres,keywords,franchise_key,created_at)
+        VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,movie_id) DO UPDATE SET
+        genres=excluded.genres,keywords=excluded.keywords,
+        franchise_key=excluded.franchise_key,created_at=excluded.created_at""",
+        (user_id, movie_id, dumps(movie["genres"]), dumps(movie["keywords"]), movie.get("franchise_key"), now),
+    )
+    row = db.execute(
+        """SELECT a.*,m.title FROM avoid_similar a JOIN movies m ON m.id=a.movie_id
+        WHERE a.user_id=? AND a.movie_id=?""",
+        (user_id, movie_id),
+    ).fetchone()
     return _rule(row)
 
 

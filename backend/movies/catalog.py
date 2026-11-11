@@ -125,6 +125,7 @@ def swipe_deck(
     rng.shuffle(movies)
     chosen: list[dict[str, Any]] = []
     covered: set[str] = set()
+    deferred: list[dict[str, Any]] = []
     for movie in movies:
         new_genres = set(movie["genres"]) - covered
         # Keep the opening cards varied, then reliably fill the requested
@@ -133,9 +134,13 @@ def swipe_deck(
         if new_genres or len(chosen) >= min(8, count // 2):
             chosen.append(movie)
             covered.update(movie["genres"])
+        else:
+            deferred.append(movie)
         if len(chosen) == count:
             break
-    return chosen
+    # Diversity is a ranking preference, never a minimum catalog requirement.
+    # A catalog with four distinct genres must still fill twenty cards.
+    return (chosen + deferred)[:count]
 
 
 def _franchise_is_available(movie: dict[str, Any], watched: set[str], catalog: list[dict[str, Any]]) -> bool:

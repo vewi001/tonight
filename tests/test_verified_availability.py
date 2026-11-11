@@ -106,7 +106,7 @@ def test_cached_recommendation_uses_confirmed_current_russian_name():
     session_id=active_session()['id']
     movie=get_movie('arrival'); movie.update(title='Old English fallback',match=90)
     with db_session() as db:
-        db.execute("UPDATE sessions SET recommendations=? WHERE id=?",(dumps([movie]),session_id))
+        db.execute("UPDATE sessions SET recommendations=?,status='recommended' WHERE id=?",(dumps([movie]),session_id))
     assert session_state(session_id)['recommendations'][0]['title']==get_movie('arrival')['russian_title']
     assert choose_movie(session_id)['title']==get_movie('arrival')['russian_title']
 

@@ -70,6 +70,10 @@ h3 { font-size:1.2rem; }
 .dot.online { background:var(--good); box-shadow:0 0 12px rgba(86,212,155,.7); }
 .panel { padding:clamp(1.3rem,4vw,2.6rem); border:1px solid var(--line); background:rgba(20,17,25,.78); border-radius:var(--radius); box-shadow:var(--shadow); backdrop-filter:blur(20px); }
 .setup-list { display:grid; gap:.65rem; margin:2rem 0; }
+.setup-screen { margin-top:clamp(0rem,3vh,2rem); }
+.setup-screen > h2 { font-size:clamp(1.65rem,4vw,2.25rem); margin-bottom:.75rem; }
+.setup-screen > .lede { font-size:1rem; margin-bottom:1rem; }
+.setup-screen .catalog-growth { margin:1rem 0; padding:clamp(1rem,2.5vw,1.5rem); }
 .setup-row { display:flex; justify-content:space-between; padding:1rem 0; border-bottom:1px solid var(--line); }
 .setup-help { margin-top:1rem; padding:1rem 0; color:var(--muted); }
 .setup-help summary { color:var(--text); cursor:pointer; font-weight:750; }

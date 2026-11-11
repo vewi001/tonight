@@ -168,7 +168,7 @@ const run=code=>vm.runInContext(code,sandbox);
  assert(!run('renderNoAvailableMovies()').includes('начните новый вечер'));
  // The last skipped movie must disappear even when there is no next candidate.
  run(`state.view='selected';state.session={...empty,status:'selected',selected:{id:'last'}};
- api=async(path)=>{if(path.endsWith('/choose-another'))throw new Error('Нет вариантов');return structuredCloneForTest(empty)};`);
+ api=async(path)=>{if(path.includes('/choose-another'))throw new Error('Нет вариантов');return structuredCloneForTest(empty)};`);
  await run('chooseAnother()');
  assert.equal(run('state.view'),'results');
  assert.equal(run('state.session.selected'),null);

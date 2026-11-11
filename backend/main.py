@@ -169,6 +169,9 @@ async def _refine_recommendations_in_background(
 
 async def finalize_recommendations(session_id: int) -> dict:
     """Persist a usable result first, then optionally refine it without blocking clients."""
+    state = session_state(session_id)
+    if state['status'] in {'completed', 'abandoned'}:
+        raise ValueError('Этот вечер уже завершён. Начните новый выбор.')
     if not both_ready(session_id):
         raise ValueError("Оба участника должны закончить быстрые реакции")
     state = session_state(session_id)
@@ -512,11 +515,24 @@ async def restart_session(session_id: int) -> dict:
 
     now = datetime.now().isoformat(timespec="seconds")
     with db_session() as db:
-        existing = db.execute("SELECT id,access_code FROM sessions WHERE id=?", (session_id,)).fetchone()
+        db.execute('BEGIN IMMEDIATE')
+        existing = db.execute("SELECT id,access_code,status,replacement_session_id FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not existing:
             raise HTTPException(404, "Сессия не найдена")
+        if existing['replacement_session_id']:
+            replacement_id = existing['replacement_session_id']
+            visited = {session_id}
+            while replacement_id not in visited:
+                visited.add(replacement_id)
+                replacement = db.execute('SELECT replacement_session_id FROM sessions WHERE id=?', (replacement_id,)).fetchone()
+                if not replacement or not replacement['replacement_session_id']:
+                    return session_state(replacement_id, db)
+                replacement_id = replacement['replacement_session_id']
+            raise HTTPException(409, 'Не удалось восстановить текущий вечер. Откройте главную Tonight.')
+        if existing['status'] == 'watching':
+            raise HTTPException(409, 'Сначала завершите текущий просмотр')
         changed = db.execute(
-            "UPDATE sessions SET status='abandoned',temporary_exclusions='{}',updated_at=? WHERE id=? AND status != 'abandoned'",
+            "UPDATE sessions SET status=CASE WHEN status='completed' THEN status ELSE 'abandoned' END,temporary_exclusions='{}',updated_at=? WHERE id=? AND status != 'abandoned'",
             (now, session_id),
         ).rowcount
         if not changed:
@@ -531,6 +547,7 @@ async def restart_session(session_id: int) -> dict:
             (date.today().isoformat(), _title(date.today()), "choosing", existing["access_code"], now, now),
         )
         new_id = cur.lastrowid
+        db.execute('UPDATE sessions SET replacement_session_id=? WHERE id=?', (new_id, session_id))
     await publish_state(session_id, "session_restarted")
     return session_state(new_id)
 
@@ -585,8 +602,11 @@ async def preferences(session_id: int, payload: PreferencesIn) -> dict:
 async def swipe_deck(session_id: int, user_id: str) -> dict:
     if user_id not in {"lera", "nikita"}:
         raise HTTPException(400, "unknown user")
-    movies, total = get_deck(session_id, user_id)
-    return {"movies": movies, "total": total}
+    try:
+        movies, total = get_deck(session_id, user_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"movies": movies, "total": total, "session": session_state(session_id)}
 
 
 @app.post("/api/sessions/{session_id}/swipe")
@@ -595,6 +615,7 @@ async def swipe(session_id: int, payload: SwipeIn) -> dict:
         progress = save_swipe(session_id, payload.user_id, payload.movie_id, payload.reaction)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    remaining, total = get_deck(session_id, payload.user_id) if session_state(session_id)['status'] == 'choosing' else ([], progress['total'])
     if both_ready(session_id):
         try:
             await finalize_recommendations(session_id)
@@ -608,9 +629,9 @@ async def swipe(session_id: int, payload: SwipeIn) -> dict:
         await publish_state(session_id, "progress")
     # Return the authoritative snapshot so a browser that started with an old
     # eight-card deck immediately receives its newly appended cards.
-    remaining, total = get_deck(session_id, payload.user_id)
     progress["movies"] = remaining
     progress["total"] = total
+    progress['session'] = session_state(session_id)
     return progress
 
 
@@ -634,9 +655,9 @@ async def choose(session_id: int) -> dict:
 
 
 @app.post("/api/sessions/{session_id}/choose-another")
-async def choose_another(session_id: int) -> dict:
+async def choose_another(session_id: int, expected_movie_id: str | None = None) -> dict:
     try:
-        selected = choose_movie(session_id, exclude_current=True)
+        selected = choose_movie(session_id, exclude_current=True, expected_movie_id=expected_movie_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     await publish_state(session_id, "selected")
@@ -686,9 +707,9 @@ async def select_catalog(session_id: int, movie_id: str, payload: ViewingContext
 
 
 @app.post("/api/sessions/{session_id}/start-watching")
-async def begin_watching(session_id: int) -> dict:
+async def begin_watching(session_id: int, expected_movie_id: str | None = None) -> dict:
     try:
-        result=start_watching(session_id)
+        result=start_watching(session_id, expected_movie_id=expected_movie_id)
     except ValueError as exc:
         raise HTTPException(409,str(exc)) from exc
     await publish_state(session_id,'watching')
@@ -696,9 +717,9 @@ async def begin_watching(session_id: int) -> dict:
 
 
 @app.post("/api/sessions/{session_id}/watched")
-async def watched(session_id: int) -> dict:
+async def watched(session_id: int, expected_movie_id: str | None = None) -> dict:
     try:
-        result = confirm_watched(session_id)
+        result = confirm_watched(session_id, expected_movie_id=expected_movie_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     await publish_state(session_id, "completed")
@@ -706,9 +727,9 @@ async def watched(session_id: int) -> dict:
 
 
 @app.post("/api/sessions/{session_id}/decline")
-async def decline(session_id: int) -> dict:
+async def decline(session_id: int, expected_movie_id: str | None = None) -> dict:
     try:
-        decline_selected_movie(session_id)
+        decline_selected_movie(session_id, expected_movie_id=expected_movie_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     await publish_state(session_id, "declined")
@@ -721,8 +742,7 @@ async def avoid_similar(session_id: int, payload: AvoidSimilarIn) -> dict:
     if not state["selected"] or state["selected"]["id"] != payload.movie_id:
         raise HTTPException(409, "Можно отклонить только выбранный сейчас фильм")
     try:
-        avoidance = add_avoidance(payload.user_id, payload.movie_id)
-        decline_selected_movie(session_id)
+        avoidance = decline_selected_movie(session_id, expected_movie_id=payload.movie_id, avoid_user_id=payload.user_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     await publish_state(session_id, "avoid_similar")

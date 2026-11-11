@@ -85,5 +85,9 @@ def test_all_five_source_choices_work_when_outbound_http_is_unavailable(monkeypa
         assert client.post(f'/api/sessions/{sid}/preferences', json={
             'user_id': user, 'moods': ['cozy'], 'energy': 'medium',
             'max_runtime': None, 'min_year': None}).status_code == 200
-        deck = client.get(f'/api/sessions/{sid}/swipe/{user}').json()
-        assert deck['total'] > 0 and deck['movies']
+        response = client.get(f'/api/sessions/{sid}/swipe/{user}')
+        # The small offline starter includes locked sequels. It must explain a
+        # real shortage rather than silently giving each viewer a partial deck.
+        assert response.status_code == 409
+        assert 'из 20' in response.json()['detail']
+        assert 'пополните каталог' in response.json()['detail']

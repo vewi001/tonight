@@ -10,6 +10,7 @@ from backend.movies.catalog import get_movie, is_released, row_to_movie, swipe_d
 from backend.movies.genres import normalize_genres
 from backend.recommendation.engine import MOOD_GENRES, recommend
 from backend.recommendation.exclusions import filter_for_users
+from backend.recommendation.avoidance import add_avoidance
 
 RU_MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
 RU_WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
@@ -22,7 +23,9 @@ def _title(day: date) -> str:
 def active_session(create: bool = True) -> dict[str, Any] | None:
     today = date.today().isoformat()
     with db_session() as db:
-        row = db.execute("SELECT * FROM sessions WHERE match_data='{}' AND (status='watching' OR session_date=?) ORDER BY (status='watching') DESC, id DESC LIMIT 1", (today,)).fetchone()
+        if create:
+            db.execute('BEGIN IMMEDIATE')
+        row = db.execute("SELECT * FROM sessions WHERE match_data='{}' AND status!='abandoned' AND (status='watching' OR session_date=?) ORDER BY (status='watching') DESC, id DESC LIMIT 1", (today,)).fetchone()
         if not row and create:
             now = datetime.now().isoformat(timespec="seconds")
             cur = db.execute(
@@ -63,55 +66,76 @@ def ensure_participant(session_id: int, user_id: str) -> None:
 def save_preferences(session_id: int, payload: Any) -> None:
     with db_session() as db:
         _ensure_participant(db, session_id, payload.user_id)
+        status = db.execute('SELECT status FROM sessions WHERE id=?', (session_id,)).fetchone()[0]
+        if status != 'choosing':
+            raise ValueError('Условия этого вечера уже сохранены. Начните новый выбор.')
+        previous = db.execute('SELECT * FROM participants WHERE session_id=? AND user_id=?',
+                              (session_id, payload.user_id)).fetchone()
         db.execute(
             """UPDATE participants SET moods=?,energy=?,max_runtime=?,min_year=?,disliked_genres=?
             WHERE session_id=? AND user_id=?""",
             (dumps(payload.moods), payload.energy, payload.max_runtime, payload.min_year, dumps(payload.disliked_genres), session_id, payload.user_id),
         )
+        if set(normalize_genres(loads(previous['disliked_genres'], []))) != set(payload.disliked_genres):
+            # Rebuild after an explicit filter edit, retaining reactions as taste
+            # evidence. Only reactions belonging to the rebuilt deck count.
+            db.execute('DELETE FROM swipe_decks WHERE session_id=? AND user_id=?',
+                       (session_id, payload.user_id))
+            db.execute('UPDATE participants SET ready=0,progress=0 WHERE session_id=? AND user_id=?',
+                       (session_id, payload.user_id))
 
 
-def _deck_for_user(session_id: int, user_id: str) -> list[dict[str, Any]]:
+def _deck_for_user(session_id: int, user_id: str, db=None) -> list[dict[str, Any]]:
     # The deck is a snapshot, not a live query. Otherwise a background catalog
     # refresh (or a newly watched prequel) can replace a card already visible in
     # the browser, and the next reaction fails validation on the server.
-    with db_session() as db:
-        rows = db.execute(
-            """SELECT m.* FROM swipe_decks d JOIN movies m ON m.id=d.movie_id
-            WHERE d.session_id=? AND d.user_id=? ORDER BY d.position""",
-            (session_id, user_id),
-        ).fetchall()
+    if db is None:
+        with db_session() as connection:
+            return _deck_for_user(session_id, user_id, connection)
+    if not db.in_transaction:
+        db.execute('BEGIN IMMEDIATE')
+    session = db.execute('SELECT status FROM sessions WHERE id=?', (session_id,)).fetchone()
+    if not session or session['status'] == 'abandoned':
+        raise ValueError('Вечер не найден или уже завершён. Откройте главную Tonight.')
+    rows = db.execute(
+        """SELECT m.* FROM swipe_decks d JOIN movies m ON m.id=d.movie_id
+        WHERE d.session_id=? AND d.user_id=? ORDER BY d.position""",
+        (session_id, user_id),
+    ).fetchall()
     existing = [row_to_movie(row) for row in rows]
+    if session['status'] != 'choosing':
+        return [movie for movie in existing if is_released(movie)]
+    _ensure_participant(db, session_id, user_id)
+    if len(existing) > settings.swipe_count:
+        db.executemany('DELETE FROM swipe_decks WHERE session_id=? AND user_id=? AND movie_id=?',
+                       [(session_id, user_id, movie['id']) for movie in existing[settings.swipe_count:]])
+        existing = existing[:settings.swipe_count]
     unreleased_ids = [movie["id"] for movie in existing if not is_released(movie)]
     if unreleased_ids:
-        with db_session() as db:
-            placeholders = ",".join("?" for _ in unreleased_ids)
-            db.execute(
-                f"DELETE FROM swipe_decks WHERE session_id=? AND user_id=? AND movie_id IN ({placeholders})",
-                (session_id, user_id, *unreleased_ids),
-            )
-            remaining = db.execute(
-                "SELECT movie_id FROM swipe_decks WHERE session_id=? AND user_id=? ORDER BY position",
-                (session_id, user_id),
-            ).fetchall()
-            # Shift first so the UNIQUE(session,user,position) constraint stays
-            # valid while compacting positions after a removed card.
-            db.execute(
-                "UPDATE swipe_decks SET position=position+100000 WHERE session_id=? AND user_id=?",
-                (session_id, user_id),
-            )
-            db.executemany(
-                "UPDATE swipe_decks SET position=? WHERE session_id=? AND user_id=? AND movie_id=?",
-                [(position, session_id, user_id, row["movie_id"]) for position, row in enumerate(remaining, start=1)],
-            )
-        existing = [movie for movie in existing if movie["id"] not in set(unreleased_ids)]
-    if len(existing) >= settings.swipe_count:
-        return existing
-
-    with db_session() as db:
-        participant = db.execute(
-            "SELECT disliked_genres FROM participants WHERE session_id=? AND user_id=?",
+        placeholders = ",".join("?" for _ in unreleased_ids)
+        db.execute(
+            f"DELETE FROM swipe_decks WHERE session_id=? AND user_id=? AND movie_id IN ({placeholders})",
+            (session_id, user_id, *unreleased_ids),
+        )
+        remaining = db.execute(
+            "SELECT movie_id FROM swipe_decks WHERE session_id=? AND user_id=? ORDER BY position",
             (session_id, user_id),
-        ).fetchone()
+        ).fetchall()
+        # Shift first so the UNIQUE(session,user,position) constraint stays
+        # valid while compacting positions after a removed card.
+        db.execute(
+            "UPDATE swipe_decks SET position=position+100000 WHERE session_id=? AND user_id=?",
+            (session_id, user_id),
+        )
+        db.executemany(
+            "UPDATE swipe_decks SET position=? WHERE session_id=? AND user_id=? AND movie_id=?",
+            [(position, session_id, user_id, row["movie_id"]) for position, row in enumerate(remaining, start=1)],
+        )
+        existing = [movie for movie in existing if movie["id"] not in set(unreleased_ids)]
+    participant = db.execute(
+        "SELECT disliked_genres FROM participants WHERE session_id=? AND user_id=?",
+        (session_id, user_id),
+    ).fetchone()
     excluded = set(normalize_genres(loads(participant["disliked_genres"], []))) if participant else set()
     # Older sessions can have been started when the product showed only eight
     # or twelve cards. Keep those reactions, then append enough new cards to
@@ -119,56 +143,81 @@ def _deck_for_user(session_id: int, user_id: str) -> list[dict[str, Any]]:
     available = swipe_deck(
         session_id, user_id, max(settings.swipe_count * 2, settings.swipe_count + len(existing)),
         excluded_genres=excluded,
-    )
+    ) if len(existing) < settings.swipe_count else []
     known_ids = {movie["id"] for movie in existing}
     additions = [movie for movie in available if movie["id"] not in known_ids]
     deck = existing + additions[: max(0, settings.swipe_count - len(existing))]
-    with db_session() as db:
-        db.executemany(
-            "INSERT OR IGNORE INTO swipe_decks(session_id,user_id,movie_id,position) VALUES(?,?,?,?)",
-            [(session_id, user_id, movie["id"], len(existing) + position) for position, movie in enumerate(additions[: max(0, settings.swipe_count - len(existing))], start=1)],
+    if len(deck) < settings.swipe_count:
+        raise ValueError(
+            f'Доступно карточек: {len(deck)} из {settings.swipe_count}. '
+            'Ослабьте стоп-жанры или пополните каталог. Ответы сохранены.'
         )
+    db.executemany(
+        "INSERT OR IGNORE INTO swipe_decks(session_id,user_id,movie_id,position) VALUES(?,?,?,?)",
+        [(session_id, user_id, movie["id"], len(existing) + position) for position, movie in enumerate(additions[: max(0, settings.swipe_count - len(existing))], start=1)],
+    )
+    _update_deck_progress(db, session_id, user_id)
     return deck
 
 
+def _update_deck_progress(db, session_id: int, user_id: str, *, persist: bool = True) -> dict[str, Any]:
+    row = db.execute('''SELECT COUNT(*) total,COUNT(s.movie_id) progress FROM swipe_decks d
+        LEFT JOIN swipes s ON s.session_id=d.session_id AND s.user_id=d.user_id AND s.movie_id=d.movie_id
+        WHERE d.session_id=? AND d.user_id=?''', (session_id, user_id)).fetchone()
+    ready = row['total'] >= settings.swipe_count and row['progress'] == row['total']
+    if persist:
+        db.execute('''UPDATE participants SET progress=?,ready=? WHERE session_id=? AND user_id=?
+            AND (progress!=? OR ready!=?)''',
+                   (row['progress'], int(ready), session_id, user_id, row['progress'], int(ready)))
+    return {'progress': row['progress'], 'total': row['total'], 'ready': ready}
+
+
 def get_deck(session_id: int, user_id: str) -> tuple[list[dict[str, Any]], int]:
-    deck = _deck_for_user(session_id, user_id)
     with db_session() as db:
+        deck = _deck_for_user(session_id, user_id, db)
         done = {row[0] for row in db.execute("SELECT movie_id FROM swipes WHERE session_id=? AND user_id=?", (session_id, user_id)).fetchall()}
     return [movie for movie in deck if movie["id"] not in done], len(deck)
 
 
 def save_swipe(session_id: int, user_id: str, movie_id: str, reaction: str) -> dict[str, Any]:
-    deck = _deck_for_user(session_id, user_id)
-    deck_ids = {movie["id"] for movie in deck}
-    if movie_id not in deck_ids:
-        raise ValueError("movie is not in this swipe deck")
     now = datetime.now().isoformat(timespec="seconds")
     with db_session() as db:
+        db.execute('BEGIN IMMEDIATE')
+        session = db.execute('SELECT status FROM sessions WHERE id=?', (session_id,)).fetchone()
+        if session and session['status'] in {'recommended', 'selected', 'watching', 'completed'}:
+            previous = db.execute('SELECT reaction FROM swipes WHERE session_id=? AND user_id=? AND movie_id=?',
+                                  (session_id, user_id, movie_id)).fetchone()
+            if previous and previous['reaction'] == reaction:
+                return _update_deck_progress(db, session_id, user_id, persist=False)
+            raise ValueError('Выбор карточек уже завершён. Обновите состояние вечера.')
+        deck = _deck_for_user(session_id, user_id, db)
+        if movie_id not in {movie['id'] for movie in deck}:
+            raise ValueError('movie is not in this swipe deck')
+        participant = db.execute('SELECT energy FROM participants WHERE session_id=? AND user_id=?',
+                                 (session_id, user_id)).fetchone()
+        if not participant['energy']:
+            raise ValueError('Сначала укажите настроение и условия вечера')
         db.execute(
             "INSERT OR REPLACE INTO swipes(session_id,user_id,movie_id,reaction,created_at) VALUES(?,?,?,?,?)",
             (session_id, user_id, movie_id, reaction, now),
         )
-        progress = db.execute("SELECT COUNT(*) FROM swipes WHERE session_id=? AND user_id=?", (session_id, user_id)).fetchone()[0]
-        total = len(deck)
-        ready = int(total > 0 and progress >= total)
-        db.execute("UPDATE participants SET progress=?,ready=? WHERE session_id=? AND user_id=?", (progress, ready, session_id, user_id))
-    return {"progress": progress, "total": total, "ready": bool(ready)}
+        return _update_deck_progress(db, session_id, user_id)
 
 
 def both_ready(session_id: int) -> bool:
-    with db_session() as db:
-        rows = db.execute("SELECT user_id,ready FROM participants WHERE session_id=?", (session_id,)).fetchall()
-    state = {row["user_id"]: bool(row["ready"]) for row in rows}
-    return state.get("lera", False) and state.get("nikita", False)
+    people = session_state(session_id)['participants']
+    return all(people[user]['ready'] for user in ('lera', 'nikita'))
 
 
 def store_recommendations(
     session_id: int, recommendations: list[dict[str, Any]], *, expected_ids: set[str] | None = None,
 ) -> bool:
     with db_session() as db:
+        db.execute('BEGIN IMMEDIATE')
+        session = db.execute('SELECT status FROM sessions WHERE id=?', (session_id,)).fetchone()
+        if not session or session['status'] in {'completed', 'abandoned'}:
+            return False
         if expected_ids is not None:
-            db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT recommendations FROM sessions WHERE id=?', (session_id,)).fetchone()
             if not row or {m['id'] for m in loads(row['recommendations'], [])} != expected_ids:
                 return False
@@ -188,22 +237,33 @@ def refill_recommendations(session_id: int) -> None:
         store_recommendations(session_id, recommend(session_id, settings.candidate_count))
 
 
-def choose_movie(session_id: int, exclude_current: bool = False) -> dict[str, Any]:
+def _check_selected(session, expected_movie_id: str | None) -> None:
+    if expected_movie_id is not None and session['selected_movie_id'] != expected_movie_id:
+        raise ValueError('Выбранный фильм уже изменился. Обновите состояние вечера.')
+
+
+def choose_movie(session_id: int, exclude_current: bool = False, *, expected_movie_id: str | None = None) -> dict[str, Any]:
     if exclude_current:
         state = session_state(session_id)
         if state['status'] == 'watching':
             raise ValueError('Сначала завершите текущий просмотр')
         if state['selected']:
             # Commit the rejection even when the whole catalog is exhausted.
-            decline_selected_movie(session_id)
+            decline_selected_movie(session_id, expected_movie_id=expected_movie_id)
     refill_recommendations(session_id)
     with db_session() as db:
+        db.execute('BEGIN IMMEDIATE')
         session = db.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not session:
             raise ValueError("session not found")
         rejected = loads(session["rejected_movies"], [])
-        if session['status'] == 'watching':
-            raise ValueError('Сначала завершите текущий просмотр')
+        if session['status'] not in {'recommended', 'selected'}:
+            raise ValueError('Этот вечер недоступен для выбора фильма')
+        if session['status'] == 'selected':
+            selected = get_movie(session['selected_movie_id'])
+            if not selected or not is_released(selected):
+                raise ValueError('Выбранный фильм больше недоступен. Начните новый выбор.')
+            return selected
         candidates = []
         for item in loads(session["recommendations"], []):
             if item["id"] in rejected:
@@ -229,12 +289,15 @@ def choose_movie(session_id: int, exclude_current: bool = False) -> dict[str, An
 def choose_specific_recommendation(session_id: int, movie_id: str) -> dict[str, Any]:
     """Accept the couple's visible top pick without a second random draw."""
     with db_session() as db:
-        session = db.execute("SELECT recommendations,rejected_movies,status FROM sessions WHERE id=?", (session_id,)).fetchone()
+        db.execute('BEGIN IMMEDIATE')
+        session = db.execute("SELECT recommendations,rejected_movies,status,selected_movie_id FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not session:
             raise ValueError("session not found")
         rejected = set(loads(session["rejected_movies"], []))
-        if session['status'] == 'watching':
-            raise ValueError('Сначала завершите текущий просмотр')
+        if session['status'] not in {'choosing', 'recommended', 'selected'}:
+            raise ValueError('Этот вечер недоступен для выбора фильма')
+        if session['status'] == 'selected' and session['selected_movie_id'] != movie_id:
+            raise ValueError('Фильм уже выбран на другом устройстве. Обновите состояние вечера.')
         recommendations = loads(session["recommendations"], [])
         movie = get_movie(movie_id)
         if movie_id in rejected or movie_id not in {item.get("id") for item in recommendations} or not movie or not is_released(movie) or not filter_for_users(db, [movie], session_id=session_id):
@@ -251,14 +314,15 @@ def choose_saved_movie(session_id: int, movie_id: str) -> dict[str, Any]:
     """Choose a movie from the couple's shared watchlist."""
     movie = get_movie(movie_id)
     with db_session() as db:
+        db.execute('BEGIN IMMEDIATE')
         session = db.execute("SELECT id,status FROM sessions WHERE id=?", (session_id,)).fetchone()
         saved = db.execute("SELECT movie_id FROM watchlist WHERE movie_id=?", (movie_id,)).fetchone()
         if not session:
             raise ValueError("session not found")
         if not saved:
             raise ValueError("movie is not in watchlist")
-        if session['status'] == 'watching':
-            raise ValueError('Сначала завершите текущий просмотр')
+        if session['status'] not in {'choosing', 'recommended', 'selected'}:
+            raise ValueError('Этот вечер недоступен для выбора фильма')
         if not movie:
             raise ValueError("movie not found")
         if not is_released(movie):
@@ -281,8 +345,9 @@ def choose_catalog_movie(session_id: int, movie_id: str, *, company: str = "coup
     if not is_released(movie):
         raise ValueError("movie is not released")
     with db_session() as db:
+        db.execute('BEGIN IMMEDIATE')
         session = db.execute("SELECT id,status FROM sessions WHERE id=?", (session_id,)).fetchone()
-        if not session or session["status"] in {"completed", "watching"}:
+        if not session or session["status"] not in {'choosing', 'recommended', 'selected'}:
             raise ValueError("session is not available")
         selected_at = datetime.now().isoformat(timespec="seconds")
         db.execute(
@@ -292,11 +357,13 @@ def choose_catalog_movie(session_id: int, movie_id: str, *, company: str = "coup
     return movie
 
 
-def start_watching(session_id: int) -> dict[str, Any]:
+def start_watching(session_id: int, *, expected_movie_id: str | None = None) -> dict[str, Any]:
     """Start the film without inventing a completed viewing or a rating."""
     with db_session() as db:
         db.execute('BEGIN IMMEDIATE')
         session = db.execute('SELECT status,selected_movie_id FROM sessions WHERE id=?',(session_id,)).fetchone()
+        if session:
+            _check_selected(session, expected_movie_id)
         if not session or not session['selected_movie_id'] or session['status'] not in {'selected','watching'}:
             raise ValueError('Сначала выберите фильм')
         if session['status']=='selected':
@@ -307,11 +374,20 @@ def start_watching(session_id: int) -> dict[str, Any]:
     return session_state(session_id)
 
 
-def confirm_watched(session_id: int) -> dict[str, Any]:
+def confirm_watched(session_id: int, *, expected_movie_id: str | None = None) -> dict[str, Any]:
     with db_session() as db:
-        session = db.execute("SELECT selected_movie_id FROM sessions WHERE id=?", (session_id,)).fetchone()
+        db.execute('BEGIN IMMEDIATE')
+        session = db.execute("SELECT selected_movie_id,status FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not session or not session["selected_movie_id"]:
             raise ValueError("movie not selected")
+        _check_selected(session, expected_movie_id)
+        if session['status'] == 'abandoned':
+            raise ValueError('Этот вечер уже завершён. Откройте текущий вечер.')
+        if session['status'] == 'completed':
+            history = db.execute('SELECT id,movie_id FROM watch_history WHERE session_id=?', (session_id,)).fetchone()
+            if not history or history['movie_id'] != session['selected_movie_id']:
+                raise ValueError('Просмотр уже завершён. Откройте историю.')
+            return {'history_id': history['id'], 'movie': get_movie(history['movie_id'])}
         now = datetime.now().isoformat(timespec="seconds")
         db.execute("INSERT OR IGNORE INTO watch_history(session_id,movie_id,watched_at) VALUES(?,?,?)", (session_id, session["selected_movie_id"], now))
         db.execute("DELETE FROM watchlist WHERE movie_id=?", (session["selected_movie_id"],))
@@ -320,14 +396,19 @@ def confirm_watched(session_id: int) -> dict[str, Any]:
     return {"history_id": history["id"], "movie": get_movie(session["selected_movie_id"])}
 
 
-def decline_selected_movie(session_id: int) -> None:
+def decline_selected_movie(session_id: int, *, expected_movie_id: str | None = None, avoid_user_id: str | None = None) -> dict | None:
     """Keep a declined option out of history and return to the short-list."""
     with db_session() as db:
+        db.execute('BEGIN IMMEDIATE')
         session = db.execute("SELECT selected_movie_id,rejected_movies,status FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not session or not session["selected_movie_id"]:
             raise ValueError("movie not selected")
+        _check_selected(session, expected_movie_id)
         if session['status'] == 'watching':
             raise ValueError('Сначала завершите текущий просмотр')
+        if session['status'] not in {'selected', 'choosing'}:
+            raise ValueError('Этот вечер уже завершён. Откройте текущий вечер.')
+        avoidance = add_avoidance(avoid_user_id, session['selected_movie_id'], db) if avoid_user_id else None
         rejected = loads(session["rejected_movies"], [])
         if session["selected_movie_id"] not in rejected:
             rejected.append(session["selected_movie_id"])
@@ -336,6 +417,7 @@ def decline_selected_movie(session_id: int) -> None:
             (dumps(rejected), datetime.now().isoformat(timespec="seconds"), session_id),
         )
     refill_recommendations(session_id)
+    return avoidance
 
 
 def record_connection_restored(session_id: int) -> int:
@@ -459,17 +541,26 @@ def session_state(session_id: int, db: Any | None = None) -> dict[str, Any]:
     owns = db is None
     if owns:
         db = connect()
+        db.execute('BEGIN')
     try:
         row = db.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not row:
             raise ValueError("session not found")
         participants = db.execute("SELECT * FROM participants WHERE session_id=?", (session_id,)).fetchall()
         people = {
-            user: {"joined": False, "progress": 0, "ready": False, "moods": [], "energy": None}
+            user: {"joined": False, "progress": 0, "total": settings.swipe_count, "ready": False, "moods": [], "energy": None}
             for user in ("lera", "nikita")
         }
         for p in participants:
-            people[p["user_id"]] = {"joined": True, "progress": p["progress"], "ready": bool(p["ready"]), "moods": loads(p["moods"], []), "energy": p["energy"]}
+            counts = db.execute('''SELECT COUNT(*) total,COUNT(s.movie_id) progress FROM swipe_decks d
+                LEFT JOIN swipes s ON s.session_id=d.session_id AND s.user_id=d.user_id AND s.movie_id=d.movie_id
+                WHERE d.session_id=? AND d.user_id=?''', (session_id, p['user_id'])).fetchone()
+            total = max(settings.swipe_count, counts['total'])
+            progress = counts['progress'] if counts['total'] else p['progress']
+            ready = progress >= total if counts['total'] else bool(p['ready']) and progress >= total
+            people[p["user_id"]] = {"joined": True, "progress": progress, "total": total, "ready": ready,
+                "moods": loads(p["moods"], []), "energy": p["energy"], "max_runtime": p['max_runtime'],
+                "min_year": p['min_year'], "disliked_genres": loads(p['disliked_genres'], [])}
         selected = get_movie(row["selected_movie_id"]) if row["selected_movie_id"] else None
         if selected and row['status'] not in {'completed','watching'} and not is_released(selected):
             selected = None  # Preserve DB selection; do not offer it again.
@@ -503,7 +594,7 @@ def session_state(session_id: int, db: Any | None = None) -> dict[str, Any]:
                 "method": "fair_joint_score",
             }
         return {
-            "id": row["id"], "date": row["session_date"], "title": row["title"], "status": row["status"],
+            "id": row["id"], "revision": row['revision'], "date": row["session_date"], "title": row["title"], "status": row["status"],
             "participants": people, "recommendations": recommendations, "selected": selected,
             "viewing_company": row["viewing_company"], "solo_user_id": row["solo_user_id"],
             "recommendation_context": recommendation_context,

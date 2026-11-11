@@ -18,7 +18,7 @@ const state = {
   presence: { lera: false, nikita: false },
   connected: true,
   prefs: { moods: [], energy: null, max_runtime: 120, min_year: 2000, disliked_genres: [] },
-  deck: [], total: 20, ws: null, reconnectTimer: null, reconnectAttempts: 0, wasDisconnected: false,
+  deck: [], total: 20, deckRequest: 0, reactionRequest: 0, deckError: '', ws: null, reconnectTimer: null, reconnectAttempts: 0, wasDisconnected: false,
   expandedDescriptions: new Set(),
   historyId: null, feedbackMovie:null, feedbackCompany:null, modal: null, deferMovieId: null, privacyDeleteOpen: false, waitTimer: null, recovering: false, restarting: false, waitError: '', backups: [], backupImportFile: null, searchQuery:'', searchResults:[], weeklyPicks:[], franchises:[], diagnostics:null, usageSummary:null, watchlistHiddenCount:0, watchlistQuery:'', watchlistGenre:'',
 };
@@ -117,7 +117,7 @@ async function api(path, options = {}) {
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     const detail = Array.isArray(body.detail) ? body.detail.map(item => item.msg).filter(Boolean).join('. ') : body.detail;
-    throw new Error(detail || 'Что-то пошло не так');
+    const error = new Error(detail || 'Что-то пошло не так'); error.status=response.status; throw error;
   }
   if (options.method && options.method !== 'GET' && !path.startsWith('/api/search/smart/')) { state.personalAt = 0; state.personalRevision++; }
   return response.json();
@@ -208,9 +208,11 @@ function render() {
 function renderSetup() {
   const o = state.setup?.ollama || {};
   const available = state.setup?.catalog_available ?? 0;
-  return shell(`<section class="panel" style="margin-top:8vh">
+  return shell(`<section class="panel setup-screen">
     <p class="eyebrow">Первый запуск</p><h2>Добро пожаловать в Tonight 🍿</h2>
     <p class="lede">Оцените впечатления от знакомых фильмов. Tonight учтёт ваши ответы при подборе для двоих.</p>
+    ${catalogExpansionCard({setup:true})}
+    ${available?'<div class="footer-actions"><button class="button secondary large" data-action="finish-setup">Продолжить с готовым каталогом</button></div>':''}
     <div class="setup-list">
       <div class="setup-row"><span>Доступно для выбора</span><strong class="${available?'ok':'warn'}">${available} из ${state.setup?.catalog || 0} фильмов</strong></div>
       <div class="setup-row"><span>Постеры загружены</span><strong class="${state.setup?.posters ? 'ok':'warn'}">${state.setup?.posters ? `✓ ${state.setup.posters}`:'○ Постеры пока не загружены'}</strong></div>
@@ -223,28 +225,28 @@ function renderSetup() {
       <div class="setup-row"><span>AI model</span><strong class="${o.model_installed ? 'ok':'warn'}">${o.model_installed ? `✓ ${esc(o.model)}`:'○ Работаем без неё'}</strong></div>
       <div class="setup-row"><span>Local network</span><strong class="ok">✓ Tonight доступен</strong></div>
     </div>${!o.model_installed ? `<p>Tonight работает и без Ollama. Для умных подсказок на этом компьютере:</p><div class="choice"><code>${esc(state.setup?.model_command || '')}</code></div>` : ''}${!state.setup?.posters ? `<p>Чтобы один раз загрузить настоящие постеры через TMDB:</p><div class="choice"><code>${esc(state.setup?.poster_command)}</code></div>` : ''}</details>
-    <div class="footer-actions">${available?'<button class="button large" data-action="finish-setup">Продолжить</button>':'<button class="button" data-view="library">Каталог и обновления</button><button class="button secondary" data-action="retry-setup">Повторить проверку</button>'}</div>
+    ${!available?'<div class="footer-actions"><button class="button secondary" data-view="library">Каталог и обновления</button><button class="button secondary" data-action="retry-setup">Повторить проверку</button></div>':''}
   </section>`, { narrow:true, nav:false });
 }
 
 function participantLine(id) {
   const person = state.session?.participants?.[id] || {};
   const live = state.presence[id];
-  let text = live ? 'в сети' : person.ready ? 'готов 🍿' : person.joined ? (person.progress ? `выбирает: ${person.progress} / ${state.total}` : 'присоединился') : 'ещё не здесь';
+  let text = live ? 'в сети' : person.ready ? 'готов 🍿' : person.joined ? (person.progress ? `выбирает: ${person.progress} / ${person.total || 20}` : 'присоединился') : 'ещё не здесь';
   return `<span><i class="dot ${live ? 'online':''}"></i>${names[id]} — ${text}</span>`;
 }
 
-function catalogExpansionCard() {
+function catalogExpansionCard({setup=false}={}) {
   if (isRemoteClient() && !state.accessCode) return '';
   const job = state.expansion;
   const busy = job?.phase === 'running';
   const count = state.expansionCount;
   const result = job && ['done','cancelled','error'].includes(job.phase);
   return `<section class="catalog-growth panel" data-expansion-panel aria-labelledby="catalog-growth-title">
-    <div><p class="eyebrow">Откройте что-то новое</p><h2 id="catalog-growth-title">Больше фильмов и постеров</h2>
-    <p>Пополните общий каталог. Фильмы и постеры сохранятся на компьютере с Tonight и появятся на всех подключённых устройствах.</p></div>
+    <div><p class="eyebrow">${setup?'Начните здесь':'Откройте что-то новое'}</p><h2 id="catalog-growth-title">${setup?'Загрузить каталог':'Больше фильмов и постеров'}</h2>
+    <p>${setup?'Добавьте фильмы с описаниями и постерами для подбора. Они сохранятся на компьютере и появятся на подключённых устройствах.':'Пополните общий каталог. Фильмы и постеры сохранятся на компьютере с Tonight и появятся на всех подключённых устройствах.'}</p></div>
     <div class="catalog-growth-actions"><div class="catalog-growth-count" role="group" aria-label="Сколько новых фильмов добавить">${[20,50,100].map(n=>`<button class="button ${count===n?'':'secondary'}" data-expand-count="${n}" aria-pressed="${count===n}" ${busy?'disabled':''}>${n} фильмов</button>`).join('')}</div>
-    <button class="button large" data-expand-start ${busy || !job?.available?'disabled':''}>${busy?'Загружаем фильмы…':`＋ Добавить ${count} фильмов и постеры`}</button>
+    <button class="button large" data-expand-start ${busy || !job?.available?'disabled':''}>${busy?'Загружаем фильмы…':setup?'Загрузить фильмы':`＋ Добавить ${count} фильмов и постеры`}</button>
     ${busy?'<button class="button ghost" data-expand-cancel>Остановить загрузку</button>':''}</div>
     <div class="catalog-growth-status" role="status" aria-live="polite">${busy || result ? `<p>${esc(job.message)}</p><p>Добавлено фильмов: <strong>${job.added}</strong>${busy?` из ${job.target}`:''} · Постеров: <strong>${job.posters}</strong></p>${busy?`<progress value="${job.added}" max="${job.target}" aria-label="Добавление новых фильмов"></progress>`:''}${job.image_errors?`<p class="hint">Не удалось получить постеры: ${job.image_errors}. Повторная загрузка попробует добавить недостающие.</p>`:''}` : `<p class="hint">${job ? (job.available?'Уже добавленные фильмы пропускаем. Ваши оценки и история сохранятся.':'Для загрузки установите актуальную сборку Tonight.'):'Проверяем возможность загрузки…'}</p>`}</div>
     <p class="hint">${isRemoteClient()?'Можно закрыть телефон — компьютер продолжит загрузку.':'Во время загрузки можно продолжать выбирать фильм.'}</p>
@@ -255,7 +257,7 @@ function paintExpansion() {
   const panel = root.querySelector('[data-expansion-panel]');
   if (!panel) return;
   const template = document.createElement('template');
-  template.innerHTML = catalogExpansionCard();
+  template.innerHTML = catalogExpansionCard({setup:state.view==='setup'});
   panel.replaceWith(template.content);
   bindExpansion();
 }
@@ -265,12 +267,14 @@ async function refreshExpansion() {
   clearTimeout(state.expansionTimer);
   state.expansionPending = true;
   try {
+    const previousPhase = state.expansion?.phase;
     const wasRunning = state.expansion?.phase === 'running';
     state.expansion = await api('/api/catalog/expand');
     if (wasRunning && state.expansion.phase !== 'running') {
       state.personalAt = 0; state.personalRevision++;
       if (state.view === 'home' && state.user) refreshPersonal();
     }
+    if(state.view==='setup' && ['done','cancelled','error'].includes(state.expansion.phase) && previousPhase!==state.expansion.phase)await refreshSetupAfterExpansion();
     paintExpansion();
   } catch (_) {
     if (!state.expansion) state.expansion = {available:false, phase:'idle'};
@@ -281,6 +285,11 @@ async function refreshExpansion() {
   }
 }
 
+async function refreshSetupAfterExpansion() {
+  state.setup = await api('/api/setup/status');
+  if(state.view==='setup')render();
+}
+
 function bindExpansion() {
   root.querySelectorAll('[data-expand-count]').forEach(button=>button.addEventListener('click',()=>{
     state.expansionCount = Number(button.dataset.expandCount); paintExpansion();
@@ -289,7 +298,9 @@ function bindExpansion() {
     event.currentTarget.disabled = true;
     try {
       state.expansion = await api('/api/catalog/expand', {method:'POST', headers:{'X-Tonight-Update':'1'}, body:JSON.stringify({count:state.expansionCount})});
+      const finished=state.expansion.phase!=='running';
       paintExpansion(); refreshExpansion();
+      if(finished && state.view==='setup')await refreshSetupAfterExpansion();
     } catch (error) { toast(error.message); refreshExpansion(); }
   });
   root.querySelector('[data-expand-cancel]')?.addEventListener('click', async event=>{
@@ -419,6 +430,7 @@ function renderVibe() {
 function renderFilters() {
   const choice = (field, value, emoji, label) => `<button class="choice ${String(state.prefs[field])===String(value)?'selected':''}" data-field="${field}" data-value="${value ?? ''}"><span>${emoji} ${label}</span></button>`;
   return shell(`<section><div class="screen-head"><p class="step">Выбор вдвоём · 2 из 2</p><h2>Чего сегодня точно хочется избежать?</h2><p class="lede">Стоп-жанры важнее любых высоких рейтингов.</p></div>
+    ${state.deckError ? `<p class="hint" role="alert">${esc(state.deckError)}</p><button class="button secondary" data-view="home">Пополнить каталог</button>` : ''}
     <h3 class="question">Длительность</h3><div class="choice-stack">${choice('max_runtime',90,'⏱','До 90 минут')}${choice('max_runtime',120,'🍿','До 2 часов')}${choice('max_runtime',150,'🎬','До 2.5 часов')}${choice('max_runtime',null,'♾','Неважно')}</div>
     <h3 class="question">Эпоха</h3><div class="choice-stack">${choice('min_year',2015,'✨','Относительно новое')}${choice('min_year',2000,'📀','2000+')}${choice('min_year',1980,'📼','80–90-е тоже ок')}${choice('min_year',null,'🎞','Вообще неважно')}</div>
     <h3 class="question">Сегодня точно НЕ хотим</h3><div class="chip-grid">${genres.map(g => `<button class="chip ${state.prefs.disliked_genres.includes(g)?'selected':''}" data-dislike="${g}" aria-pressed="${state.prefs.disliked_genres.includes(g)}">${g}</button>`).join('')}</div>
@@ -427,10 +439,6 @@ function renderFilters() {
 }
 
 function renderSwipe() {
-  // A realtime progress event may repaint the card while a local request is in
-  // flight. The new card is a fresh interaction surface and must never inherit
-  // the previous card's click lock.
-  reacting = false;
   const movie = state.deck[0];
   const progress = state.total - state.deck.length;
   if (!movie) return renderNoAvailableMovies();
@@ -438,7 +446,7 @@ function renderSwipe() {
     <div class="shared-heading"><h1>Смотрели этот фильм?</h1><p id="swipe-guidance">Если смотрели — оцените впечатление. Если нет — выберите «Не смотрел(а)».</p></div>
     <div class="swipe-stage"><article class="swipe-card" id="swipe-card" tabindex="0" aria-label="${esc(movie.title)}" aria-describedby="swipe-guidance">
       <div class="shared-film"><div class="shared-poster">${poster(movie)}</div><div class="shared-film-copy"><h2>${esc(movie.title)}</h2><p class="meta">${movie.year} · ${movie.runtime} мин<br>${esc(movie.genres.join(' · '))}</p><p class="shared-synopsis">${esc(tonightSynopsis(movie))}</p></div></div>
-      <div class="reaction-row" aria-label="Впечатление от просмотренного фильма">${reactionMap.map(([id,e,label]) => `<button class="reaction" data-reaction="${id}" title="${label}"><span class="reaction-icon" aria-hidden="true">${e}</span><span>${label}</span></button>`).join('')}</div>
+      <div class="reaction-row" aria-label="Впечатление от просмотренного фильма">${reactionMap.map(([id,e,label]) => `<button class="reaction" data-reaction="${id}" title="${label}" ${reacting?'disabled':''}><span class="reaction-icon" aria-hidden="true">${e}</span><span>${label}</span></button>`).join('')}</div>
       <p class="action-help">Ответы сохраняются для вашего профиля и помогают подбору для двоих.</p>
       <details class="shared-help"><summary>Зачем оценивать знакомые фильмы?</summary><p>Так Tonight узнаёт ваш вкус. Здесь оценивают прошлый просмотр, а не желание посмотреть фильм. Оба зрителя отвечают отдельно.</p></details>
       ${movie.overview ? descriptionDisclosure(movie.overview, movie.id, 'card-description') : ''}
@@ -451,8 +459,8 @@ function renderWaiting() {
   const title = op.ready ? 'Сводим ваши вкусы…' : `Ждём ${names[other].replace('а','у')}`;
   const bothReady = state.session?.participants?.lera?.ready && state.session?.participants?.nikita?.ready;
   const recovery = bothReady ? `<div class="footer-actions"><button class="button secondary" data-action="retry-recommendations" ${state.recovering?'disabled':''}>${state.recovering ? 'Проверяем…' : 'Проверить результат'}</button><button class="button ghost" data-action="restart-session" ${state.restarting?'disabled':''}>${state.restarting ? 'Начинаем…' : 'Начать новый выбор'}</button></div>${state.waitError ? `<p class="hint">${esc(state.waitError)}</p>` : ''}` : '';
-  return shell(`<section class="waiting"><div><div class="projector"><div class="beam"></div></div><p class="eyebrow">Готово! 🍿</p><h2>${title}</h2><p class="lede" style="margin-inline:auto">${op.ready ? 'Ищем не просто среднее, а вариант, от которого обоим будет хорошо.' : `${names[other]} выбирает: ${op.progress || 0} / ${state.total}`}</p>
-    <div class="status-cards"><div class="status-card">${emojis[state.user]} ${names[state.user]}<br><strong class="ok">готов 🍿</strong></div><div class="status-card">${emojis[other]} ${names[other]}<br><strong>${op.ready?'готов 🍿':`${op.progress || 0} / ${state.total}`}</strong></div></div>${recovery}</div></section>`);
+  return shell(`<section class="waiting"><div><div class="projector"><div class="beam"></div></div><p class="eyebrow">Готово! 🍿</p><h2>${title}</h2><p class="lede" style="margin-inline:auto">${op.ready ? 'Ищем не просто среднее, а вариант, от которого обоим будет хорошо.' : `${names[other]} выбирает: ${op.progress || 0} / ${op.total || 20}`}</p>
+    <div class="status-cards"><div class="status-card">${emojis[state.user]} ${names[state.user]}<br><strong class="ok">готов 🍿</strong></div><div class="status-card">${emojis[other]} ${names[other]}<br><strong>${op.ready?'готов 🍿':`${op.progress || 0} / ${op.total || 20}`}</strong></div></div>${recovery}</div></section>`);
 }
 
 function descriptionDisclosure(description, movieId, className = 'movie-description') {
@@ -824,36 +832,39 @@ async function selectUser(user) {
     state.exclusionDraft={};state.exclusionError='';
     state.user = user; localStorage.setItem('tonight:user', user);
     await api(`/api/sessions/${state.session.id}/join`, {method:'POST', body:joinBody(user)});
+    if(state.user!==user)return;
     if (isRemoteClient()) sessionStorage.setItem('tonight:access-code', state.accessCode);
-    state.session = await api(`/api/sessions/${state.session.id}`);
+    const current=await api(`/api/sessions/${state.session.id}`);
+    if(state.user!==user)return;
+    applyRealtimeSession(current);restorePreferences();
     connectWs();
     const pending=state.pendingChoice;
     state.view='home';
     if(pending)await openChoiceMode(pending);else render();
-  } catch (e) { state.user=null; localStorage.removeItem('tonight:user'); toast(e.message); render(); }
+  } catch (e) { if(state.user!==user)return;state.user=null; localStorage.removeItem('tonight:user'); toast(e.message); render(); }
 }
 
 function switchUser() {
   smartSearch.cancel();
   clearTimeout(state.reconnectTimer); state.reconnectTimer=null;
-  state.ws?.close(); state.ws=null; state.user=null; state.accessCode=''; state.prefs=defaultPrefs(); state.deck=[]; localStorage.removeItem('tonight:user'); sessionStorage.removeItem('tonight:access-code'); state.view='home'; render();
+  state.reactionRequest++;reacting=false;state.savingPrefs=false;
+  state.ws?.close(); state.ws=null; state.user=null; state.accessCode=''; state.prefs=defaultPrefs(); state.deck=[]; state.deckRequest++; state.deckError=''; localStorage.removeItem('tonight:user'); sessionStorage.removeItem('tonight:access-code'); state.view='home'; render();
 }
 
 async function continueSession() {
   if(state.setup?.catalog_available===0){state.view='setup';render();return;}
   try {
     if (state.session.status === 'completed') {
-      state.session = await api(`/api/sessions/${state.session.id}/restart`, {method:'POST'});
-      await api(`/api/sessions/${state.session.id}/join`, {method:'POST', body:joinBody(state.user)}); connectWs();
-      state.prefs=defaultPrefs(); state.deck=[];
+      await restartSession();return;
     }
+    if(state.session.participants?.[state.user]?.energy)restorePreferences();
     if (state.session.status === 'watching') state.view='watching';
     else if (state.session.status === 'selected') state.view='selected';
     else if (state.session.status === 'recommended') {
       if (!state.session.recommendations?.length) { await recoverRecommendations(); return; }
       state.view='results';
     }
-    else if (state.session.participants[state.user]?.ready) state.view='waiting';
+    else if (state.session.participants[state.user]?.ready) { await loadDeck(); }
     else if (state.session.participants[state.user]?.energy) await loadDeck();
     else state.view='vibe';
     render();
@@ -862,12 +873,15 @@ async function continueSession() {
 
 async function recoverRecommendations() {
   if (state.recovering || !state.session) return;
+  const sid=state.session.id,user=state.user,view=state.view;
   state.recovering = true; state.waitError = ''; render();
   try {
-    state.session = await api(`/api/sessions/${state.session.id}/recommend`, {method:'POST'});
-    if (state.session.status === 'recommended') state.view = 'results';
+    const current=await api(`/api/sessions/${sid}/recommend`, {method:'POST'});
+    if(state.session?.id!==sid||state.user!==user)return;
+    applyRealtimeSession(current);
+    if (state.session.status === 'recommended' && state.view===view) state.view = 'results';
   } catch (e) {
-    state.waitError = e.message;
+    if(state.session?.id===sid&&state.user===user)state.waitError = e.message;
   } finally {
     state.recovering = false; render();
   }
@@ -877,15 +891,31 @@ function defaultPrefs() {
   return { moods: [], energy: null, max_runtime: 120, min_year: 2000, disliked_genres: [] };
 }
 
+function restorePreferences() {
+  const person=state.session?.participants?.[state.user];
+  state.prefs=person?.energy?{moods:[...(person.moods || [])],energy:person.energy,
+    max_runtime:person.max_runtime ?? null,min_year:person.min_year ?? null,
+    disliked_genres:[...(person.disliked_genres || [])]}:defaultPrefs();
+}
+
 async function restartSession() {
   if (state.restarting || !state.session || !state.user) return;
+  const user=state.user,sid=state.session.id;
   state.restarting = true; render();
   try {
-    state.session = await api(`/api/sessions/${state.session.id}/restart`, {method:'POST'});
-    await api(`/api/sessions/${state.session.id}/join`, {method:'POST', body:joinBody(state.user)});
-    state.session = await api(`/api/sessions/${state.session.id}`);
-    state.prefs = defaultPrefs(); state.deck = []; state.total = 20;
-    connectWs(); state.view = 'vibe';
+    const next=await api(`/api/sessions/${sid}/restart`, {method:'POST'});
+    if(state.user!==user||state.session?.id!==sid)return;
+    applyRealtimeSession(next);
+    await api(`/api/sessions/${next.id}/join`, {method:'POST', body:joinBody(user)});
+    const current=await api(`/api/sessions/${next.id}`);
+    if(state.user!==user||state.session?.id!==next.id)return;
+    applyRealtimeSession(current);restorePreferences();
+    state.deck = [];state.deckError='';state.total = 20;
+    connectWs();
+    if(current.status==='choosing'){
+      state.view='vibe';
+      if(current.participants?.[user]?.energy)await loadDeck();
+    }
   } catch (e) {
     state.waitError = e.message;
   } finally {
@@ -895,15 +925,21 @@ async function restartSession() {
 
 async function followRestartedSession() {
   if (!state.user || state.restarting) return;
+  const user=state.user;
   state.restarting = true;
   try {
-    state.session = await api('/api/sessions/active');
-    await api(`/api/sessions/${state.session.id}/join`, {method:'POST', body:joinBody(state.user)});
-    state.session = await api(`/api/sessions/${state.session.id}`);
-    state.prefs = defaultPrefs(); state.deck = []; state.total = 20;
-    connectWs(); state.view = 'vibe';
+    const next=await api('/api/sessions/active');
+    if(state.user!==user)return;
+    await api(`/api/sessions/${next.id}/join`, {method:'POST', body:joinBody(user)});
+    const current=await api(`/api/sessions/${next.id}`);
+    if(state.user!==user)return;
+    applyRealtimeSession(current);restorePreferences();
+    state.deck = [];state.deckError='';state.total = 20;
+    connectWs();
+    if(current.status==='choosing' && ['swipe','waiting'].includes(state.view))await loadDeck();
     toast('Начинаем новый выбор 🍿');
   } catch (e) {
+    if(state.user!==user)return;
     state.error = e.message; state.view = 'error';
   } finally {
     state.restarting = false; render();
@@ -916,33 +952,66 @@ function scheduleWaitingCheck() {
 }
 
 async function savePrefs() {
+  if(state.savingPrefs)return;
+  const user=state.user,sid=state.session?.id;
+  state.savingPrefs=true;state.deckError='';
   try {
-    await api(`/api/sessions/${state.session.id}/preferences`, {method:'POST', body:JSON.stringify({user_id:state.user,...state.prefs})});
+    await api(`/api/sessions/${sid}/preferences`, {method:'POST', body:JSON.stringify({user_id:user,...state.prefs})});
+    if(state.user!==user||state.session?.id!==sid)return;
     await loadDeck(); render();
-  } catch (e) { toast(e.message); }
+  } catch (e) { if(state.user===user&&state.session?.id===sid)toast(e.message); }
+  finally{state.savingPrefs=false;}
 }
 
-async function loadDeck() {
+async function loadDeck({quiet=false}={}) {
+  const user=state.user,sid=state.session?.id,view=state.view,request=++state.deckRequest;
   try {
-    const data = await api(`/api/sessions/${state.session.id}/swipe/${state.user}`); state.deck=data.movies; state.total=data.total;
+    const data = await api(`/api/sessions/${sid}/swipe/${user}`);
+    if(state.user!==user||state.session?.id!==sid||request!==state.deckRequest)return;
+    if(data.session && !applyRealtimeSession(data.session)){
+      if(state.session.status!=='choosing')return;
+      if(JSON.stringify(data.session.participants?.[user])!==JSON.stringify(state.session.participants?.[user])){
+        await loadDeck();return;
+      }
+    }
+    state.deck=data.movies; state.total=data.total;state.deckError='';
+    if(state.session.status!=='choosing')return;
+    if(state.view!==view)return;
     if(!data.total){state.view='filters';toast('Нет доступных карточек. Проверьте ограничения или пополните каталог.');}
     else state.view=state.deck.length?'swipe':'waiting';
-  } catch (e) { toast(e.message); state.view='home'; }
+  } catch (e) {
+    if(state.user!==user||state.session?.id!==sid||request!==state.deckRequest)return;
+    if(state.view!==view)return;
+    if(quiet && e.status!==409)return;
+    state.deckError=e.message;state.view=e.status===409?'filters':'home';toast(e.message);
+  }
 }
 
 let reacting = false;
 async function react(reaction) {
   if (reacting || !state.deck[0]) return; reacting=true;
+  const user=state.user,sid=state.session?.id,movieId=state.deck[0].id,view=state.view,request=++state.reactionRequest;
   const card = document.querySelector('#swipe-card');
   if (card) { card.style.transform = reaction==='dislike'?'translateX(-120%) rotate(-12deg)':'translateX(120%) rotate(12deg)'; card.style.opacity='0'; }
   try {
-    const progress = await api(`/api/sessions/${state.session.id}/swipe`, {method:'POST', body:JSON.stringify({user_id:state.user,movie_id:state.deck[0].id,reaction})});
-    state.deck = progress.movies; state.total = progress.total; state.session=await api(`/api/sessions/${state.session.id}`);
+    const progress = await api(`/api/sessions/${sid}/swipe`, {method:'POST', body:JSON.stringify({user_id:user,movie_id:movieId,reaction})});
+    if(state.user!==user||state.session?.id!==sid||request!==state.reactionRequest)return;
+    const current=progress.session || await api(`/api/sessions/${sid}`);
+    if(state.user!==user||state.session?.id!==sid||request!==state.reactionRequest)return;
+    if(!applyRealtimeSession(current)){
+      if(['swipe','waiting'].includes(state.view))await loadDeck();
+      return;
+    }
+    state.deck = progress.movies; state.total = progress.total;
     state.waitError = progress.recommendation_error || '';
-    if (!state.deck.length) state.view=state.session.status==='recommended'?'results':'waiting';
-    setTimeout(render, 130);
-  } catch (e) { toast(e.message); render(); }
-  finally { reacting=false; }
+    if (state.view===view && !state.deck.length) state.view=state.session.status==='recommended'?'results':'waiting';
+  } catch (e) {
+    if(state.user===user&&state.session?.id===sid){
+      toast(e.message);
+      if(state.view==='swipe')await loadDeck({quiet:true});
+    }
+  }
+  finally { if(request===state.reactionRequest){reacting=false;if(state.user===user&&state.session?.id===sid)render();} }
 }
 
 function bindSwipeGestures() {
@@ -963,28 +1032,41 @@ function bindSwipeGestures() {
   });
 }
 
+function movieActionPath(action) {
+  const movieId=state.session?.selected?.id;
+  return `/api/sessions/${state.session.id}/${action}${movieId?`?expected_movie_id=${encodeURIComponent(movieId)}`:''}`;
+}
+
+async function refreshCurrentSession(sid, user) {
+  const current=await api(`/api/sessions/${sid}`);
+  if(state.session?.id!==sid||state.user!==user)return false;
+  return applyRealtimeSession(current);
+}
+
 async function choose() {
+  const sid=state.session.id,user=state.user;
   const button=document.querySelector('[data-action="choose"]'); if(button)button.disabled=true;
   document.querySelector('.result-hero')?.classList.add('roulette');
-  try { const movie=await api(`/api/sessions/${state.session.id}/choose`,{method:'POST'}); await new Promise(r=>setTimeout(r,1400)); state.session.selected=movie; state.session.viewing_company='couple';state.session.solo_user_id=null;state.session.status='selected'; state.view='selected'; render(); }
+  try { await api(`/api/sessions/${sid}/choose`,{method:'POST'}); if(await refreshCurrentSession(sid,user))render(); }
   catch(e){toast(e.message); if(button)button.disabled=false;}
 }
 
 async function acceptMainRecommendation(movieId) {
   if (!movieId) return;
+  const sid=state.session.id,user=state.user;
   try {
-    const movie = await api(`/api/sessions/${state.session.id}/select/${encodeURIComponent(movieId)}`, {method:'POST'});
-    state.session.selected = movie; state.session.viewing_company='couple';state.session.solo_user_id=null;state.session.status = 'selected'; state.view = 'selected'; render();
-  } catch (e) { toast(e.message); }
+    await api(`/api/sessions/${sid}/select/${encodeURIComponent(movieId)}`, {method:'POST'});
+    if(await refreshCurrentSession(sid,user))render();
+  } catch (e) { await refreshCurrentSession(sid,user).catch(()=>{});toast(e.message);render(); }
 }
 
 async function chooseAnother() {
   if(state.session?.viewing_company==='solo' && state.tonight?.user===state.user){openTonight();await fetchTonight(true);return;}
-  try { const movie=await api(`/api/sessions/${state.session.id}/choose-another`,{method:'POST'}); state.session.selected=movie; render(); toast('Другой вариант — без повторов'); }
+  const sid=state.session.id,user=state.user;
+  try { await api(movieActionPath('choose-another'),{method:'POST'}); if(await refreshCurrentSession(sid,user)){render();toast('Другой вариант — без повторов');} }
   catch(e){
     try {
-      state.session=await api(`/api/sessions/${state.session.id}`);
-      if(state.session.status==='recommended')state.view='results';
+      await refreshCurrentSession(sid,user);
       render();
     } catch (_) {}
     toast(e.message);
@@ -992,13 +1074,16 @@ async function chooseAnother() {
 }
 
 async function startWatching() {
-  try { state.session=await api(`/api/sessions/${state.session.id}/start-watching`,{method:'POST'}); state.view=state.session.status==='watching'?'watching':'home'; render(); }
-  catch(e) { toast(e.message); }
+  const sid=state.session.id,user=state.user;
+  try { const current=await api(movieActionPath('start-watching'),{method:'POST'}); if(state.session?.id===sid&&state.user===user){applyRealtimeSession(current);render();} }
+  catch(e) { await refreshCurrentSession(sid,user).catch(()=>{});toast(e.message);render(); }
 }
 
 async function watched(rate = true) {
+  const sid=state.session.id,user=state.user,view=state.view;
   try {
-    const result=await api(`/api/sessions/${state.session.id}/watched`,{method:'POST'});
+    const result=await api(movieActionPath('watched'),{method:'POST'});
+    if(state.session?.id!==sid||state.user!==user||![view,'home'].includes(state.view))return;
     state.session.status='completed'; state.historyId=result.history_id; state.feedbackMovie=result.movie; state.feedbackCompany=state.session.viewing_company;
     if (rate) { state.view='feedback'; render(); } else await go('history');
   } catch(e) { toast(e.message); }
@@ -1006,10 +1091,10 @@ async function watched(rate = true) {
 
 async function openHistoryRating(historyId) {
   if (!state.user) return;
-  const fromView = state.view;
+  const fromView = state.view,user=state.user;
   try {
     const history=await api('/api/history');
-    if (state.view !== fromView) return;
+    if (state.view !== fromView || state.user!==user) return;
     const item=history.items.find(entry=>entry.history_id===historyId);
     if (!item) { toast('Просмотр не найден'); return; }
     state.historyId=historyId; state.feedbackMovie=item.movie; state.feedbackCompany=item.viewing_company; state.view='feedback'; render();
@@ -1017,21 +1102,24 @@ async function openHistoryRating(historyId) {
 }
 
 async function declineMovie() {
+  const sid=state.session.id,user=state.user;
   if(state.session?.viewing_company==='solo' && state.tonight?.user===state.user){
-    try{state.session=await api(`/api/sessions/${state.session.id}/decline`,{method:'POST'});openTonight();await fetchTonight(true);}catch(e){toast(e.message);}return;
+    try{const current=await api(movieActionPath('decline'),{method:'POST'});if(state.session?.id!==sid||state.user!==user)return;if(applyRealtimeSession(current)){openTonight();await fetchTonight(true);}}catch(e){toast(e.message);}return;
   }
-  try { state.session=await api(`/api/sessions/${state.session.id}/decline`,{method:'POST'}); state.view='results'; toast('Не сохраняем — выбираем другой вариант'); render(); }
-  catch(e) { toast(e.message); }
+  try { const current=await api(movieActionPath('decline'),{method:'POST'});if(state.session?.id!==sid||state.user!==user)return;if(applyRealtimeSession(current)){toast('Не сохраняем — выбираем другой вариант');render();} }
+  catch(e) { await refreshCurrentSession(sid,user).catch(()=>{});toast(e.message);render(); }
 }
 
 async function avoidSimilarMovie() {
   const movie = state.session?.selected;
   if (!movie) return;
+  const sid=state.session.id,user=state.user;
   const button = document.querySelector('[data-action="confirm-avoid-similar"]');
   if (button) button.disabled = true;
   try {
-    const result = await api(`/api/sessions/${state.session.id}/avoid-similar`, {method:'POST', body:JSON.stringify({user_id:state.user,movie_id:movie.id})});
-    state.session = result.session; state.view = 'results'; render(); toast('Похожие варианты будут встречаться реже');
+    const result = await api(`/api/sessions/${sid}/avoid-similar`, {method:'POST', body:JSON.stringify({user_id:user,movie_id:movie.id})});
+    if(state.session?.id!==sid||state.user!==user)return;
+    if(applyRealtimeSession(result.session)){render();toast('Похожие варианты будут встречаться реже');}
   } catch (e) { if (button) button.disabled = false; toast(e.message); }
 }
 
@@ -1160,12 +1248,14 @@ function renderPrivacyDeleteDialog() {
 }
 
 async function saveFeedback(rating) {
-  try { await api(`/api/history/${state.historyId}/feedback`,{method:'POST',body:JSON.stringify({user_id:state.user,rating})}); if(state.feedbackCompany==='solo'){toast('Оценка сохранена');await go('history');}else{state.view='eveningFeedback';render();} }
+  const user=state.user,historyId=state.historyId,view=state.view,company=state.feedbackCompany;
+  try { await api(`/api/history/${historyId}/feedback`,{method:'POST',body:JSON.stringify({user_id:user,rating})});if(state.user!==user||state.historyId!==historyId||state.view!==view)return; if(company==='solo'){toast('Оценка сохранена');await go('history');}else{state.view='eveningFeedback';render();} }
   catch(e) { toast(e.message); }
 }
 
 async function saveEveningFeedback(fit) {
-  try { await api(`/api/history/${state.historyId}/evening-feedback`,{method:'POST',body:JSON.stringify({user_id:state.user,fit})}); toast('Оценка сохранена'); await go('history'); }
+  const user=state.user,historyId=state.historyId,view=state.view;
+  try { await api(`/api/history/${historyId}/evening-feedback`,{method:'POST',body:JSON.stringify({user_id:user,fit})});if(state.user!==user||state.historyId!==historyId||state.view!==view)return; toast('Оценка сохранена'); await go('history'); }
   catch(e) { toast(e.message); }
 }
 
@@ -1180,18 +1270,25 @@ async function searchCatalog(query) {
 async function selectCatalogMovie(movieId, company='solo') {
   if(state.movieSelecting || !state.user || !state.session)return;
   state.movieSelecting=true;
-  const origin=state.view;
+  const origin=state.view,user=state.user;
+  let sid=state.session.id;
   document.querySelectorAll('[data-viewing-company],[data-tm-select],[data-smart-select],[data-r-accept],[data-dialog-select],[data-action="watch-saved"],[data-action="select-search-result"],[data-action="select-personal"]').forEach(el=>el.disabled=true);
   try {
     if(state.session.status==='completed') {
-      state.session=await api(`/api/sessions/${state.session.id}/restart`,{method:'POST'});
-      await api(`/api/sessions/${state.session.id}/join`,{method:'POST',body:joinBody(state.user)});
+      const next=await api(`/api/sessions/${sid}/restart`,{method:'POST'});
+      if(state.user!==user||state.session?.id!==sid)return;
+      applyRealtimeSession(next);sid=next.id;
+      await api(`/api/sessions/${sid}/join`,{method:'POST',body:joinBody(user)});
+      if(state.user!==user||state.session?.id!==sid)return;
       connectWs();
     }
-    await api(`/api/sessions/${state.session.id}/select-catalog/${encodeURIComponent(movieId)}`,{method:'POST',body:JSON.stringify({company,user_id:state.user})});
-    state.session=await api(`/api/sessions/${state.session.id}`);
+    await api(`/api/sessions/${sid}/select-catalog/${encodeURIComponent(movieId)}`,{method:'POST',body:JSON.stringify({company,user_id:user})});
+    if(state.user!==user||state.session?.id!==sid)return;
+    const current=await api(`/api/sessions/${sid}`);
+    if(state.user!==user||state.session?.id!==sid)return;
+    if(!applyRealtimeSession(current))return;
     if(origin!=='selected')state.selectionReturn=origin;state.modal=null;document.querySelector('.movie-dialog')?.remove();
-    state.view='selected';render();
+    if(state.view===origin && current.status==='selected')state.view='selected';render();
     root.querySelector('h1')?.setAttribute('tabindex','-1');root.querySelector('h1')?.focus();
   } catch(error) {toast(error.message);render();}
   finally {state.movieSelecting=false;}
@@ -1253,26 +1350,39 @@ function renderDeferDialog() {
 }
 
 function applyRealtimeSession(nextSession) {
+  if (!nextSession) return false;
+  if(nextSession.id===state.session?.id && (nextSession.revision ?? 0)<(state.session.revision ?? 0))return false;
   state.personalAt = 0; state.personalRevision++;
   if(nextSession && (state.session?.id!==nextSession.id || state.session?.status!==nextSession.status && nextSession.status==='completed')){state.exclusionsAt=0;invalidateExclusionResults();}
-  if (!nextSession) return;
-  if (nextSession.status === 'abandoned') { followRestartedSession(); return; }
-  const previousStatus = state.session?.status;
+  if (nextSession.status === 'abandoned') { followRestartedSession(); return false; }
+  const changedEvening=nextSession.id!==state.session?.id;
   state.session = nextSession;
-  if (nextSession.status === 'recommended' && state.view === 'waiting') state.view = 'results';
-  if (nextSession.status === 'selected' && ['results','waiting'].includes(state.view)) state.view = 'selected';
-  if (nextSession.status === 'watching' && ['selected','results','waiting','swipe'].includes(state.view)) state.view='watching';
-  if (nextSession.status === 'completed' && ['selected','watching','results','waiting','swipe'].includes(state.view)) state.view='home';
+  const sharedViews=['vibe','quick','filters','swipe','waiting','results','selected','watching'];
+  if(changedEvening){state.deck=[];state.deckRequest++;state.reactionRequest++;reacting=false;state.deckError='';state.total=20;restorePreferences();}
+  if(sharedViews.includes(state.view)){
+    if(nextSession.status==='recommended')state.view='results';
+    else if(nextSession.status==='selected')state.view='selected';
+    else if(nextSession.status==='watching')state.view='watching';
+    else if(nextSession.status==='completed')state.view='home';
+    else if(changedEvening){const person=nextSession.participants?.[state.user];state.view=person?.energy?(person.ready?'waiting':'swipe'):'vibe';}
+    else if(nextSession.participants?.[state.user]?.ready && ['swipe','waiting'].includes(state.view))state.view='waiting';
+  }
+  return true;
 }
 
 async function restoreAfterReconnect(ws, recovered) {
+  const user=state.user,sessionId=state.session?.id;
   try {
     const active = await api('/api/sessions/active');
-    if (state.ws !== ws || !state.user) return;
-    await api(`/api/sessions/${active.id}/join`, {method:'POST', body:joinBody(state.user)});
+    if (state.ws !== ws || !user || state.user!==user || state.session?.id!==sessionId) return;
+    await api(`/api/sessions/${active.id}/join`, {method:'POST', body:joinBody(user)});
     const current = await api(`/api/sessions/${active.id}`);
-    if (state.ws !== ws) return;
+    if (state.ws !== ws || state.user!==user || state.session?.id!==sessionId) return;
     applyRealtimeSession(current);
+    if(current.status==='choosing' && ['swipe','waiting'].includes(state.view)){
+      await loadDeck();
+      if(state.ws!==ws)return;
+    }
     const socketSessionId = Number(new URL(ws.url).pathname.split('/').at(-2));
     if (active.id !== socketSessionId) {
       connectWs();
@@ -1295,7 +1405,7 @@ function connectWs() {
   state.ws?.close();
   const protocol=location.protocol==='https:'?'wss':'ws'; const accessQuery=isRemoteClient() && state.accessCode ? `?code=${encodeURIComponent(state.accessCode)}` : ''; const ws=new WebSocket(`${protocol}://${location.host}/ws/session/${state.session.id}/${state.user}${accessQuery}`); state.ws=ws;
   ws.onopen=()=>{const recovered=state.wasDisconnected; ws.pinger=setInterval(()=>{if(ws.readyState===1)ws.send('ping')},20000); restoreAfterReconnect(ws,recovered);};
-  ws.onmessage=e=>{ const data=JSON.parse(e.data); if(data.type==='exclusions_changed'){if(data.session)applyRealtimeSession(data.session);exclusionsChanged().catch(e=>toast(e.message));return;} if(data.type==='personal_changed'){state.personalAt=0;state.personalRevision++;if(state.view==='home')refreshPersonal();return;} if(data.type==='privacy_reset'){forgetLocalViewer();state.ws=null;toast('Личные данные удалены на основном компьютере');setTimeout(()=>location.reload(),700);return;} if(!data.presence && !data.session) return; if(data.presence)state.presence=data.presence; if(data.session)applyRealtimeSession(data.session); renderRealtime(); };
+  ws.onmessage=e=>{ if(state.ws!==ws)return;const data=JSON.parse(e.data);if(data.session && data.session.id!==state.session?.id)return; if(data.type==='exclusions_changed'){if(data.session)applyRealtimeSession(data.session);exclusionsChanged().catch(e=>toast(e.message));return;} if(data.type==='personal_changed'){state.personalAt=0;state.personalRevision++;if(state.view==='home')refreshPersonal();return;} if(data.type==='privacy_reset'){forgetLocalViewer();state.ws=null;toast('Личные данные удалены на основном компьютере');setTimeout(()=>location.reload(),700);return;} if(!data.presence && !data.session) return; if(data.presence)state.presence=data.presence; if(data.session){const previous=state.session?.participants?.[state.user]?.progress;if(applyRealtimeSession(data.session) && data.session.status==='choosing' && ['swipe','waiting'].includes(state.view) && !reacting && previous!==data.session.participants?.[state.user]?.progress)loadDeck().then(renderRealtime);} renderRealtime(); };
   ws.onerror=()=>{};
   ws.onclose=event=>{clearInterval(ws.pinger); if(state.ws!==ws)return; if(event.code===1008 && isRemoteClient()){state.user=null;state.accessCode='';localStorage.removeItem('tonight:user');sessionStorage.removeItem('tonight:access-code');state.view='home';toast('Нужен код с экрана Tonight');render();return;} state.connected=false;state.wasDisconnected=true;renderRealtime();const delay=Math.min(12000,1200*(2**Math.min(state.reconnectAttempts,3)));state.reconnectAttempts+=1;state.reconnectTimer=setTimeout(()=>{if(state.user&&state.ws===ws)connectWs();},delay);};
 }
